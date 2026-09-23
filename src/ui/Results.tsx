@@ -108,7 +108,12 @@ function Lead({ target, limit, result, napkin, was, onChange }: {
       </p>
       <div className="lead-value">
         <span className="big">{m ? percent(m.value, digitsFor(m)) : '…'}</span>
-        <span className={`verdict ${result.verdict}`}>{VERDICT[result.verdict]}</span>
+        {/* Kept and broken are carried by the number's color; "can't tell" has no color, so it says so. */}
+        {result.verdict === 'unclear' ? (
+          <span className="verdict unclear">{VERDICT.unclear}</span>
+        ) : (
+          <span className="sr-only">{VERDICT[result.verdict]}</span>
+        )}
       </div>
       <p className="lead-sub">
         {m ? (
