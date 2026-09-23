@@ -77,3 +77,36 @@ export function seededRandom(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+/**
+ * A deterministic PRNG that can restart from a new seed. The simulator
+ * reseeds it for every request from (seed, request number), so a change that
+ * alters one request's draws leaves every other request's draws alone, and
+ * runs of two variants of a model can be compared request by request.
+ */
+export function reseedableRandom(): { next: () => number; reseed: (seed: number) => void } {
+  let a = 0;
+  return {
+    next: () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    },
+    reseed: (seed: number) => {
+      a = seed >>> 0;
+    },
+  };
+}
+
+/** Mixes a run's seed and a request number into a well-spread 32-bit seed. */
+export function mixSeed(seed: number, index: number): number {
+  let h = Math.imul(seed ^ 0x85ebca6b, 0xc2b2ae35) ^ Math.imul(index + 0x27d4eb2f, 0x165667b1);
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}

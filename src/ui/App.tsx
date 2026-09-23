@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ActionSpec, type RankedAction, applyAction } from '../actions';
 import type { Analysis } from '../analysis';
 import { type Doc, addCall, addService, blankDoc, docProblems, makeRedundant, setObjectives, toDot, toYaml } from '../doc';
 import type { Evaluation } from '../model/slo';
@@ -14,6 +15,14 @@ import type { WorkerRequest, WorkerResponse } from './worker';
 import { nodeName, share } from './words';
 
 type Mode = 'learn' | 'model';
+export interface ActionsState {
+  list: RankedAction[];
+  tried: number;
+  total: number;
+  done: boolean;
+  /** The model (as DOT + YAML) these actions were ranked for. */
+  key: string;
+}
 
 const DEBOUNCE_MS = 150;
 /** Edits with the same coalesce key this close together are one undo step. */
@@ -66,6 +75,7 @@ export function App() {
   const [analysis, setAnalysis] = useState<Analysis>();
   const [evaluation, setEvaluation] = useState<Evaluation>();
   const [baselines, setBaselines] = useState<Record<string, Evaluation>>({});
+  const [actions, setActions] = useState<ActionsState>();
 
   // ---- Editing -------------------------------------------------------------
 
@@ -90,6 +100,7 @@ export function App() {
     // Results belong to the doc they were computed for; a new doc starts fresh.
     setAnalysis(undefined);
     setEvaluation(undefined);
+    setActions(undefined);
     setSelection(undefined);
     setHighlight(undefined);
     setPicking(undefined);
@@ -148,15 +159,22 @@ export function App() {
   const baselineKey = mode === 'learn' && !lessonEdited ? lessonId : undefined;
 
   const worker = useRef<Worker>(undefined);
-  const requests = useRef<{ id: number; baselineOf?: string }>({ id: 0 });
+  const requests = useRef<{ id: number; baselineOf?: string; key: string }>({ id: 0, key: '' });
 
   useEffect(() => {
     const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     w.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
       const message = event.data;
       if (message.id !== requests.current.id) return;
+      if (message.kind === 'actions') {
+        setActions({ list: message.actions, tried: message.tried, total: message.total, done: message.done, key: requests.current.key });
+        return;
+      }
       const next = message.kind === 'analysis' ? message.analysis.evaluation : message.evaluation;
-      if (message.kind === 'analysis') setAnalysis(message.analysis);
+      if (message.kind === 'analysis') {
+        setAnalysis(message.analysis);
+        setActions(undefined);
+      }
       setEvaluation(next);
       const baselineOf = requests.current.baselineOf;
       if (baselineOf && next && next.latency.status !== 'pending') setBaselines((b) => ({ ...b, [baselineOf]: next }));
@@ -167,7 +185,7 @@ export function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      requests.current = { id: requests.current.id + 1, baselineOf: baselineKey };
+      requests.current = { id: requests.current.id + 1, baselineOf: baselineKey, key: dot + yaml };
       const request: WorkerRequest = { id: requests.current.id, dot, yaml };
       worker.current?.postMessage(request);
     }, DEBOUNCE_MS);
@@ -244,6 +262,11 @@ export function App() {
       evaluation={current.evaluation}
       baseline={mode === 'learn' && lessonEdited ? baselines[lessonId] : undefined}
       advanced={advanced}
+      actions={actions?.key === dot + yaml ? actions : undefined}
+      onApply={(spec: ActionSpec) => {
+        edit(applyAction(doc, spec));
+        setHighlight(undefined);
+      }}
       onObjectives={(objectives) => edit(setObjectives(doc, objectives))}
       onHighlight={setHighlight}
       onSelect={setSelection}

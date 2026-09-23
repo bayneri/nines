@@ -32,7 +32,18 @@ export function combineRuns(runs: LatencySimulation[]): LatencySimulation {
     eventualFullSuccesses: sum('eventualFullSuccesses'),
     timeoutBlame,
     unattributedLoss: sum('unattributedLoss'),
+    requestLatencies: concat(runs.map((r) => r.requestLatencies)),
   };
+}
+
+function concat(arrays: Float64Array[]): Float64Array {
+  const out = new Float64Array(arrays.reduce((n, a) => n + a.length, 0));
+  let offset = 0;
+  for (const a of arrays) {
+    out.set(a, offset);
+    offset += a.length;
+  }
+  return out;
 }
 
 /** Number of values <= ms in an ascending array. */

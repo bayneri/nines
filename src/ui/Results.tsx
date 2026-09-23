@@ -1,5 +1,7 @@
 import { type ReactNode, useEffect, useState } from 'react';
+import { type ActionSpec, describeAction } from '../actions';
 import type { Analysis } from '../analysis';
+import type { ActionsState } from './App';
 import { type Doc, withLatencyObjective } from '../doc';
 import type { Objectives } from '../model/inputs';
 import type { Evaluation, Measure, ObjectiveResult, Verdict } from '../model/slo';
@@ -17,6 +19,8 @@ interface Props {
   /** The lesson as loaded, to compare against once edited. */
   baseline?: Evaluation;
   advanced: boolean;
+  actions?: ActionsState;
+  onApply: (spec: ActionSpec) => void;
   onObjectives: (objectives: Objectives) => void;
   onHighlight: (target: Selection) => void;
   onSelect: (target: Selection) => void;
@@ -28,7 +32,7 @@ const find = <K extends ObjectiveResult['kind']>(objectives: ObjectiveResult[], 
   objectives.find((o): o is Extract<ObjectiveResult, { kind: K }> => o.kind === kind);
 const VERDICT: Record<Verdict, string> = { met: 'Kept', missed: 'Broken', unclear: "Can't tell yet" };
 
-export function Results({ doc, analysis, evaluation: e, baseline, advanced, onObjectives, onHighlight, onSelect }: Props) {
+export function Results({ doc, analysis, evaluation: e, baseline, advanced, actions, onApply, onObjectives, onHighlight, onSelect }: Props) {
   const objectives = doc.objectives;
   const within = find(e.objectives, 'succeed_within');
   const was = (pick: (ev: Evaluation) => Measure | undefined) => {
@@ -61,7 +65,8 @@ export function Results({ doc, analysis, evaluation: e, baseline, advanced, onOb
 
       <Breakdown doc={doc} analysis={analysis} evaluation={e} advanced={advanced} was={was} onObjectives={onObjectives} />
       <SeparateVsCombined objectives={e.objectives} />
-      <Losses doc={doc} analysis={analysis} evaluation={e} onHighlight={onHighlight} onSelect={onSelect} />
+      <Actions doc={doc} evaluation={e} actions={actions} onApply={onApply} onHighlight={onHighlight} />
+      {advanced && <Losses doc={doc} analysis={analysis} evaluation={e} onHighlight={onHighlight} onSelect={onSelect} />}
 
       {e.fullIgnoringTime.value < e.ignoringTime.value - 1e-12 && (
         <p className="aside">
@@ -251,6 +256,64 @@ function SeparateVsCombined({ objectives }: { objectives: ObjectiveResult[] }) {
       Both separate targets are met, yet the promise is broken. Availability counts slow successes as good, and a latency target only looks at requests that succeeded, so
       together they still let a request be failed or slow.
     </p>
+  );
+}
+
+// ---- What would help most ---------------------------------------------------
+
+const SHOWN = 4;
+
+function Actions({ doc, evaluation: e, actions, onApply, onHighlight }: { doc: Doc; evaluation: Evaluation; actions?: ActionsState; onApply: (spec: ActionSpec) => void; onHighlight: (t: Selection) => void }) {
+  const within = find(e.objectives, 'succeed_within');
+  const promise = doc.objectives.succeedWithin;
+  const measuring = promise ? `succeed within ${promise.ms} ms` : 'succeed';
+  const clear = actions?.list.filter((a) => a.clear) ?? [];
+  const unclear = (actions?.list.length ?? 0) - clear.length;
+  const broken = within?.verdict === 'missed';
+  return (
+    <section className="actions-list" aria-labelledby="actions-title" aria-busy={!actions?.done}>
+      <h3 id="actions-title">What would help most</h3>
+      {!actions || (actions.list.length === 0 && !actions.done) ? (
+        <p className="section-intro">Trying changes aimed at where requests are lost…</p>
+      ) : (
+        <>
+          <p className="section-intro">
+            Each change tried on its own, ranked by how many more requests {measuring}.
+            {!actions.done && ` Tried ${actions.tried} of ${actions.total}…`}
+          </p>
+          {clear.length === 0 && actions.done && <p className="aside">None of the changes tried made a clear difference.</p>}
+          <ol>
+            {clear.slice(0, SHOWN).map((action) => {
+              const { title, detail, target } = describeAction(doc, action.spec);
+              const tradeoffs: string[] = [];
+              if (action.partialAfter !== undefined && action.partialBefore !== undefined) tradeoffs.push(`${share(action.partialAfter - action.partialBefore)} more answers would be partial`);
+              if (action.p99After !== undefined && action.p99Before !== undefined && action.p99After > action.p99Before * 1.1) tradeoffs.push(`p99 rises from ${ms(action.p99Before)} to ${ms(action.p99After)}`);
+              return (
+                <li key={JSON.stringify(action.spec)} onMouseEnter={() => onHighlight(target)} onMouseLeave={() => onHighlight(undefined)}>
+                  <span className="gain" title={`${percent(action.after, decimalsFor(action.after))} would ${measuring}`}>
+                    +{share(action.gain.value)}
+                    <span className="gain-after">→ {percent(action.after, Math.min(3, decimalsFor(action.after)))}</span>
+                  </span>
+                  <span className="action-body">
+                    <span className="action-title">{title}</span>
+                    <span className="action-detail">{detail}</span>
+                    {action.keepsPromise && <span className="keeps">Keeps the promise</span>}
+                    {tradeoffs.length > 0 && <span className="tradeoff">Trade-off: {tradeoffs.join('; ')}.</span>}
+                  </span>
+                  <button className="apply" onClick={() => onApply(action.spec)} onFocus={() => onHighlight(target)} onBlur={() => onHighlight(undefined)}>
+                    Apply
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+          {actions.done && broken && clear.length > 0 && !clear.some((a) => a.keepsPromise) && (
+            <p className="aside">No single change keeps the promise. Apply one and the list is worked out again for what’s left.</p>
+          )}
+          {actions.done && unclear > 0 && <p className="fine">{unclear === 1 ? 'One other change' : `${unclear} other changes`} made no clear difference.</p>}
+        </>
+      )}
+    </section>
   );
 }
 

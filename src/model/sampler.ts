@@ -27,7 +27,7 @@
  */
 import { type CompiledEdge, type CompiledModel, type CompiledNode, compile } from './compile';
 import type { Inputs } from './inputs';
-import { seededRandom } from './probability';
+import { mixSeed, reseedableRandom } from './probability';
 import type { Topology } from './topology';
 
 export interface SampledAvailability {
@@ -53,6 +53,11 @@ export interface LatencySimulation {
    */
   timeoutBlame: Float64Array;
   unattributedLoss: number;
+  /**
+   * Each request's latency in request order, NaN if it failed. Runs of two
+   * variants with the same seeds line up request by request.
+   */
+  requestLatencies: Float64Array;
 }
 
 /** A call's outcome with timeouts enforced (ok, full, ms) and ignoring time (ok0, full0). */
@@ -75,7 +80,8 @@ export function simulateLatency(model: CompiledModel, trials: number, seed: numb
 }
 
 function simulate(model: CompiledModel, trials: number, seed: number, timing: boolean): LatencySimulation {
-  const random = seededRandom(seed);
+  const rng = reseedableRandom();
+  const random = rng.next;
   // Outage state per instance, sampled lazily once per request (trial).
   const sampledIn = new Int32Array(model.instanceCount).fill(-1);
   const isDown = new Uint8Array(model.instanceCount);
@@ -213,9 +219,12 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
   let eventualFullSuccesses = 0;
   const timeoutBlame = new Float64Array(model.edgeCount);
   let unattributedLoss = 0;
+  const requestLatencies = new Float64Array(trials);
   for (trial = 0; trial < trials; trial++) {
+    rng.reseed(mixSeed(seed, trial));
     lostCalls.length = 0;
     const r = attempt(entry, 0);
+    requestLatencies[trial] = r.ok ? r.ms : NaN;
     if (r.ok0 && !r.ok) {
       if (lostCalls.length === 0) unattributedLoss++;
       for (const edge of lostCalls) timeoutBlame[edge]! += 1 / lostCalls.length;
@@ -234,5 +243,6 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
     eventualFullSuccesses,
     timeoutBlame,
     unattributedLoss,
+    requestLatencies,
   };
 }
