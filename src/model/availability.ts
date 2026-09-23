@@ -149,7 +149,7 @@ export function evaluate(model: CompiledModel, options: ModelOptions = {}): Avai
     }
   };
 
-  const entryCall: CompiledEdge = { target: model.entry, dependency: 'hard', fanout: 1, fanoutRequire: 1, retries: 0, classesCovered: 1, stage: 0, timeoutMs: Infinity };
+  const entryCall: CompiledEdge = { index: -1, target: model.entry, dependency: 'hard', fanout: 1, fanoutRequire: 1, retries: 0, classesCovered: 1, stage: 0, timeoutMs: Infinity };
 
   const variables = outageVariables(nodes);
   const totalOutages = convolve(variables.map((v) => v.pmf));

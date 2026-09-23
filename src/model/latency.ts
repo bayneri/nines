@@ -21,13 +21,17 @@ export function combineRuns(runs: LatencySimulation[]): LatencySimulation {
     }
     return merged.sort();
   };
-  const sum = (key: 'trials' | 'eventualSuccesses' | 'eventualFullSuccesses') => runs.reduce((n, r) => n + r[key], 0);
+  const sum = (key: 'trials' | 'eventualSuccesses' | 'eventualFullSuccesses' | 'unattributedLoss') => runs.reduce((n, r) => n + r[key], 0);
+  const timeoutBlame = new Float64Array(runs[0]?.timeoutBlame.length ?? 0);
+  for (const run of runs) run.timeoutBlame.forEach((v, i) => (timeoutBlame[i]! += v));
   return {
     trials: sum('trials'),
     successLatencies: merge('successLatencies'),
     fullSuccessLatencies: merge('fullSuccessLatencies'),
     eventualSuccesses: sum('eventualSuccesses'),
     eventualFullSuccesses: sum('eventualFullSuccesses'),
+    timeoutBlame,
+    unattributedLoss: sum('unattributedLoss'),
   };
 }
 

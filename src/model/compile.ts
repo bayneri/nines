@@ -17,6 +17,8 @@ import type { Inputs } from './inputs';
 import type { DependencyKind, NodeType, Topology } from './topology';
 
 export interface CompiledEdge {
+  /** Index of this call in `topology.edges`. */
+  index: number;
   target: number;
   dependency: DependencyKind;
   fanout: number;
@@ -64,6 +66,8 @@ export interface CompiledModel {
   /** Total instances across all nodes. */
   instanceCount: number;
   classCount: number;
+  /** Number of calls in the topology (reachable or not), for per-call results. */
+  edgeCount: number;
 }
 
 /**
@@ -99,6 +103,7 @@ export function compile(topology: Topology, inputs: Inputs): CompiledModel {
   }
   const ids = [...topology.nodes.keys()].filter((id) => reachable.has(id));
   const index = new Map(ids.map((id, i) => [id, i]));
+  const edgeIndex = new Map(topology.edges.map((e, i) => [e, i]));
 
   // Class boundaries per node: the distinct fanout values of edges into it.
   const boundaries = new Map(ids.map((id) => [id, new Set<number>()]));
@@ -126,6 +131,7 @@ export function compile(topology: Topology, inputs: Inputs): CompiledModel {
       classOffset,
       ...failure,
       edges: topology.out.get(id)!.map((edge) => ({
+        index: edgeIndex.get(edge)!,
         target: index.get(edge.to)!,
         dependency: edge.dependency,
         fanout: edge.fanout,
@@ -145,5 +151,5 @@ export function compile(topology: Topology, inputs: Inputs): CompiledModel {
     return compiled;
   });
 
-  return { nodes, entry: index.get(topology.entry)!, instanceCount: offset, classCount: classOffset };
+  return { nodes, entry: index.get(topology.entry)!, instanceCount: offset, classCount: classOffset, edgeCount: topology.edges.length };
 }

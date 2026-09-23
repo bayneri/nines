@@ -22,6 +22,8 @@
  * request that succeeds with timeouts also succeeds ignoring time, and the
  * difference between the two counts estimates what timeouts cost, which is
  * far less noisy than estimating success with timeouts on its own.
+ *
+ * The same coupling says which calls' timeouts cost each lost request.
  */
 import { type CompiledEdge, type CompiledModel, type CompiledNode, compile } from './compile';
 import type { Inputs } from './inputs';
@@ -43,6 +45,14 @@ export interface LatencySimulation {
   /** Requests that succeeded in the coupled world that ignores time. */
   eventualSuccesses: number;
   eventualFullSuccesses: number;
+  /**
+   * Requests lost to timeouts, blamed per call (indexed like topology.edges).
+   * A lost request is split evenly between the hard calls that failed only
+   * because their own timeout cut off an attempt that was going to succeed.
+   * Sums to the timeout loss, less `unattributedLoss`.
+   */
+  timeoutBlame: Float64Array;
+  unattributedLoss: number;
 }
 
 /** A call's outcome with timeouts enforced (ok, full, ms) and ignoring time (ok0, full0). */
@@ -70,6 +80,9 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
   const sampledIn = new Int32Array(model.instanceCount).fill(-1);
   const isDown = new Uint8Array(model.instanceCount);
   let trial = 0;
+  // Calls lost to their own timeout in the current trial.
+  const lostCalls: number[] = [];
+  const lostIn = new Int32Array(model.edgeCount).fill(-1);
 
   const inOutage = (node: CompiledNode, instance: number): boolean => {
     const id = node.offset + instance;
@@ -152,17 +165,25 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
     let ms = 0;
     let result: Outcome | undefined;
     let result0: Outcome | undefined;
+    let cutOff = false;
     for (let i = 0; i <= edge.retries && !(result && result0); i++) {
       const r = attempt(target, instance);
       if (!result) {
         if (timing && r.ms > edge.timeoutMs) {
           ms += edge.timeoutMs;
+          // This attempt was going to succeed; the timeout cost it.
+          if (r.ok) cutOff = true;
         } else {
           ms += r.ms;
           if (r.ok) result = r;
         }
       }
       if (!result0 && r.ok0) result0 = r;
+    }
+    // Lost to its own timeout (deeper losses are blamed on the deeper call).
+    if (!result && result0 && cutOff && edge.dependency === 'hard' && lostIn[edge.index] !== trial) {
+      lostIn[edge.index] = trial;
+      lostCalls.push(edge.index);
     }
     return { ok: !!result, full: !!result?.full, ms, ok0: !!result0, full0: !!result0?.full0 };
   };
@@ -190,8 +211,15 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
   const fullLatencies: number[] = [];
   let eventualSuccesses = 0;
   let eventualFullSuccesses = 0;
+  const timeoutBlame = new Float64Array(model.edgeCount);
+  let unattributedLoss = 0;
   for (trial = 0; trial < trials; trial++) {
+    lostCalls.length = 0;
     const r = attempt(entry, 0);
+    if (r.ok0 && !r.ok) {
+      if (lostCalls.length === 0) unattributedLoss++;
+      for (const edge of lostCalls) timeoutBlame[edge]! += 1 / lostCalls.length;
+    }
     if (r.ok0) eventualSuccesses++;
     if (r.full0) eventualFullSuccesses++;
     if (!r.ok) continue;
@@ -204,5 +232,7 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
     fullSuccessLatencies: Float64Array.from(fullLatencies).sort(),
     eventualSuccesses,
     eventualFullSuccesses,
+    timeoutBlame,
+    unattributedLoss,
   };
 }
