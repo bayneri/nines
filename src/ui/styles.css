@@ -862,6 +862,84 @@ input[type='checkbox'] {
   background: var(--warn-soft);
   font-size: 13px;
 }
+.path {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.path.idle {
+  align-items: flex-start;
+}
+.path.idle .section-intro {
+  margin: 2px 0 0;
+}
+.path.idle button {
+  height: auto;
+  min-height: 32px;
+  white-space: normal;
+}
+.path h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.path.reached h3 {
+  color: var(--good);
+}
+.path.running h3 {
+  color: var(--muted);
+}
+.path-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: step;
+}
+.path-steps li {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0 6px 26px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.path-steps li:not(.start, .goal) {
+  counter-increment: step;
+  font-weight: 500;
+}
+.path-steps li:not(.start, .goal)::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 7px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.path-steps li.start,
+.path-steps li.goal {
+  color: var(--muted);
+}
+.path-steps li.goal {
+  border-top-style: dashed;
+}
+.path-steps .value {
+  flex: none;
+  font: 500 13px var(--mono);
+}
+.check.small {
+  font-size: 12.5px;
+}
 .actions-list h3 {
   margin: 0 0 8px;
   font-size: 14px;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type ActionSpec, type RankedAction, actionKey, applyAction, candidateActions, describeAction, rankActions, tenTimes } from '../src/actions';
+import { type ActionSpec, PARTIAL_TYPES, type PathProgress, type RankedAction, actionKey, applyAction, applyPath, candidateActions, describeAction, findPath, rankActions, tenTimes } from '../src/actions';
 import { analyze } from '../src/analysis';
 import { type Doc, toDot, toYaml } from '../src/doc';
 import { compile } from '../src/model/compile';
@@ -63,11 +63,9 @@ describe('rankActions', () => {
   it('puts the lesson’s answer first: optional beats a nine', () => {
     const doc = lesson('product_page');
     const ranked = rank(doc);
-    expect(titles(doc, ranked.map((r) => r.spec)).slice(0, 3)).toEqual([
-      'Let Product page carry on without Inventory',
-      'Add a fallback for Inventory',
-      'Make Inventory 10× more reliable',
-    ]);
+    const order = titles(doc, ranked.map((r) => r.spec));
+    expect(order[0]).toBe('Let Product page carry on without Inventory');
+    expect(order.indexOf('Add a fallback for Inventory')).toBeLessThan(order.indexOf('Make Inventory 10× more reliable'));
     expect(ranked[0]!.clear).toBe(true);
     // Its trade-off: more answers are partial.
     expect(ranked[0]!.partialAfter).toBeGreaterThan(ranked[0]!.partialBefore!);
@@ -97,5 +95,48 @@ describe('rankActions', () => {
       const [a, b] = [ranked[i - 1]!, ranked[i]!];
       expect(Number(a.clear) > Number(b.clear) || (a.clear === b.clear && a.gain.value >= b.gain.value)).toBe(true);
     }
+  });
+});
+
+describe('findPath', () => {
+  const run = (doc: Doc, options: Parameters<typeof findPath>[2] = {}) => {
+    let last: PathProgress | undefined;
+    for (const p of findPath(doc, baseline(doc), { trials: 10_000, ...options })) last = p;
+    return last!;
+  };
+
+  it('finds that checkout’s promise is about time: one change, to payments’ latency', () => {
+    const path = run(lesson('checkout'));
+    expect(path.outcome).toBe('reached');
+    expect(path.steps.map((s) => s.title)).toEqual(['Make Payments twice as fast']);
+    expect(path.steps[0]!.after).toBeGreaterThanOrEqual(0.999);
+  });
+
+  it('keeps answers complete unless partial answers are allowed', () => {
+    const doc = lesson('product_page_promise');
+    const complete = run(doc, { maxSteps: 3 });
+    expect(complete.steps.every((s) => !PARTIAL_TYPES.includes(s.spec.type))).toBe(true);
+    const partial = run(doc, { maxSteps: 1, allowPartial: true });
+    expect(partial.steps[0]!.title).toBe('Let Product page carry on without Inventory');
+  });
+
+  it('climbs, never repeats a change, and stops at the step limit when it falls short', () => {
+    const path = run(lesson('product_page_promise'), { maxSteps: 3 });
+    expect(path.outcome).toBe('limit');
+    const afters = path.steps.map((s) => s.after);
+    expect(afters.every((v, i) => v > (i === 0 ? path.start : afters[i - 1]!))).toBe(true);
+    expect(new Set(path.steps.map((s) => s.title)).size).toBe(path.steps.length);
+  });
+
+  it('has nothing to do when the promise is already kept', () => {
+    expect(run(lesson('product_page')).outcome).toBe('nothing-to-do');
+  });
+
+  it('applies a path step by step', () => {
+    const doc = lesson('product_page_promise');
+    const path = run(doc, { maxSteps: 2 });
+    const applied = applyPath(doc, path.steps);
+    expect(applied).toEqual(path.steps.reduce((d, s) => applyAction(d, s.spec), doc));
+    expect(applied).not.toEqual(doc);
   });
 });

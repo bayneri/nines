@@ -88,7 +88,7 @@ const SOURCES: Scenario[] = [
     id: 'product_page_promise',
     title: 'The promise came first',
     summary: 'Sales promised 99.99%. This system delivers about 99.7%.',
-    more: 'That’s 1.4 nines short. The best single change, making inventory optional, reaches 99.84%. Getting to 99.99% takes several changes at once, or a different promise.',
+    more: 'That’s 1.4 nines short. The best single change, making inventory optional, reaches 99.84%. Getting to 99.99% takes several changes at once (“Find a path to the promise” shows which), or a different promise.',
     tryIt: {
       label: 'Promise what it can keep',
       apply: (doc) => ({ ...doc, objectives: { ...doc.objectives, availability: 0.997, succeedWithin: { ms: 300, target: 0.996 } } }),

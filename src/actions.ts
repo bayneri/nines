@@ -18,7 +18,9 @@ export type ActionSpec =
   | { type: 'optional'; call: number; timeoutMs?: number }
   | { type: 'retry'; call: number }
   | { type: 'timeout'; call: number; ms: number }
-  | { type: 'partial'; call: number; require: number };
+  | { type: 'partial'; call: number; require: number }
+  | { type: 'faster'; node: string }
+  | { type: 'hurry'; call: number; ms: number };
 
 export interface RankedAction {
   spec: ActionSpec;
@@ -58,7 +60,17 @@ export function applyAction(doc: Doc, spec: ActionSpec): Doc {
       return updateCall(doc, spec.call, { timeoutMs: spec.ms });
     case 'partial':
       return updateCall(doc, spec.call, { fanoutRequire: spec.require });
+    case 'faster': {
+      const node = doc.nodes.find((n) => n.id === spec.node)!;
+      return node.latency ? updateNode(doc, spec.node, { latency: halved(node.latency) }) : doc;
+    }
+    case 'hurry':
+      return updateCall(doc, spec.call, { timeoutMs: spec.ms });
   }
+}
+
+function halved(latency: { p50Ms: number; p99Ms: number }) {
+  return { p50Ms: Math.max(1, Math.round(latency.p50Ms / 2)), p99Ms: Math.max(1, Math.round(latency.p99Ms / 2)) };
 }
 
 /** 99.9% -> 99.99%: ten times fewer failures, without float noise. */
@@ -108,6 +120,23 @@ export function candidateActions(doc: Doc, analysis: Analysis, evaluation: Evalu
     }
   }
 
+  // With a time limit, the slowest services on required calls are levers too
+  // (an optional call's timeout already caps how long it can take), and so is
+  // waiting less for optional calls.
+  const within = evaluation.objectives.find((o) => o.kind === 'succeed_within');
+  if (within?.fastShare && within.fastShare.value < 0.9999) {
+    const reachable = new Set(analysis.levers?.map((l) => l.id) ?? []);
+    const required = new Set(doc.calls.filter((c) => c.dependency === 'hard').map((c) => c.to));
+    const slowest = doc.nodes
+      .filter((n) => n.type === 'service' && n.latency && (n.id === doc.entry || required.has(n.id)) && (reachable.size === 0 || reachable.has(n.id)))
+      .sort((a, b) => b.latency!.p99Ms - a.latency!.p99Ms)
+      .slice(0, 3);
+    for (const node of slowest) specs.push({ type: 'faster', node: node.id });
+    doc.calls.forEach((c, i) => {
+      if (c.dependency === 'soft' && c.timeoutMs !== undefined && c.timeoutMs > 20) specs.push({ type: 'hurry', call: i, ms: roundUp(c.timeoutMs / 2, 10) });
+    });
+  }
+
   const seen = new Set<string>();
   return specs.filter((s) => (seen.has(actionKey(s)) ? false : (seen.add(actionKey(s)), true)));
 }
@@ -145,7 +174,12 @@ export interface RankOptions {
   seeds?: number[];
   /** Candidates simulated at most. */
   limit?: number;
+  /** Only these kinds of change; all by default. */
+  types?: ActionSpec['type'][];
 }
+
+/** Changes that make some answers partial instead of failing them. */
+export const PARTIAL_TYPES: ActionSpec['type'][] = ['optional', 'partial', 'hurry'];
 
 /**
  * Ranks candidate actions, yielding the ranking so far after each one is
@@ -159,7 +193,7 @@ export interface RankProgress {
 
 export function* rankActions(doc: Doc, baseline: { analysis: Analysis; evaluation: Evaluation }, options: RankOptions = {}): Generator<RankProgress> {
   const seeds = options.seeds ?? [1, 2];
-  const candidates = candidateActions(doc, baseline.analysis, baseline.evaluation);
+  const candidates = candidateActions(doc, baseline.analysis, baseline.evaluation).filter((s) => !options.types || options.types.includes(s.type));
   if (candidates.length === 0) return;
 
   // Simulation cost varies a hundredfold between graphs: size the sample to a
@@ -185,7 +219,7 @@ export function* rankActions(doc: Doc, baseline: { analysis: Analysis; evaluatio
     .map((spec) => {
       const next = applyAction(doc, spec);
       const exact = analyze(toDot(next), toYaml(next)).availability?.availability ?? 0;
-      const timing = spec.type === 'timeout' || spec.type === 'partial';
+      const timing = spec.type === 'timeout' || spec.type === 'partial' || spec.type === 'faster' || spec.type === 'hurry';
       return { spec, prior: timing ? Infinity : exact - base.evaluation.ignoringTime.value };
     })
     .sort((a, b) => b.prior - a.prior)
@@ -283,6 +317,16 @@ export function describeAction(doc: Doc, spec: ActionSpec): { title: string; det
       const call = doc.calls[spec.call]!;
       return { title: `Answer with ${spec.require} of ${call.fanout} ${name(call.to)} copies`, detail: 'Skips the slowest few; those answers are partial.', target: { kind: 'call', index: spec.call } };
     }
+    case 'hurry': {
+      const call = doc.calls[spec.call]!;
+      return { title: `Wait less for ${name(call.to)}`, detail: `Its timeout from ${call.timeoutMs} ms to ${spec.ms} ms. More answers go out without it.`, target: { kind: 'call', index: spec.call } };
+    }
+    case 'faster': {
+      const node = doc.nodes.find((n) => n.id === spec.node)!;
+      const l = node.latency!;
+      const h = halved(l);
+      return { title: `Make ${name(spec.node)} twice as fast`, detail: `Latency from ${l.p50Ms}–${l.p99Ms} ms to ${h.p50Ms}–${h.p99Ms} ms (p50–p99).`, target: { kind: 'node', id: spec.node } };
+    }
   }
 }
 
@@ -291,3 +335,125 @@ export function docFromAnalysis(analysis: Analysis): Doc | undefined {
   return analysis.topology && analysis.inputs ? fromParsed(analysis.topology, analysis.inputs) : undefined;
 }
 
+
+// ---------------------------------------------------------------------------
+// A path to the promise: apply the change that helps most, re-rank for the
+// changed system, and repeat until the promise is kept or nothing helps.
+
+export interface PathStep {
+  spec: ActionSpec;
+  title: string;
+  /** The promise metric after this step (and all before it). */
+  after: number;
+}
+
+export type PathOutcome =
+  /** The promise is kept after the steps. */
+  | 'reached'
+  /** Nothing tried made a clear difference any more. */
+  | 'stuck'
+  /** The step limit ran out first. */
+  | 'limit'
+  /** There is no promise to reach, or it is already kept. */
+  | 'nothing-to-do';
+
+export interface PathOptions extends RankOptions {
+  maxSteps?: number;
+  /** Allow changes that make answers partial (optional calls, partial fan-out). */
+  allowPartial?: boolean;
+}
+
+export interface PathProgress {
+  steps: PathStep[];
+  start: number;
+  target?: number;
+  /** While searching: which step, and how far through its candidates. */
+  searching?: { step: number; tried: number; total: number };
+  outcome?: PathOutcome;
+  /** Reached, but by less than the simulation's noise. */
+  narrow?: boolean;
+  /** At the end: what's left, split into failures and time. */
+  succeedAtAll?: number;
+  fastShare?: number;
+  partialBefore?: number;
+  partialAfter?: number;
+  p99Before?: number;
+  p99After?: number;
+}
+
+/** What a change touches, so a path never applies the same kind of change to the same thing twice. */
+function identity(doc: Doc, spec: ActionSpec): string {
+  if ('node' in spec) return `${spec.type}:${spec.node}`;
+  const call = doc.calls[spec.call]!;
+  return `${spec.type}:${call.from}->${call.to}`;
+}
+
+export function* findPath(doc: Doc, baseline: { analysis: Analysis; evaluation: Evaluation }, options: PathOptions = {}): Generator<PathProgress> {
+  const maxSteps = options.maxSteps ?? 8;
+  const types = options.allowPartial ? undefined : (['reliable', 'fallback', 'retry', 'timeout', 'faster'] as ActionSpec['type'][]);
+  const target = doc.objectives.succeedWithin?.target ?? 1;
+  const within = (e: Evaluation) => e.objectives.find((o) => o.kind === 'succeed_within');
+  const kept = (e: Evaluation) => (metric(e)?.value ?? 0) >= target;
+  const value = (e: Evaluation) => metric(e)?.value ?? 0;
+  const partial = (e: Evaluation) => {
+    const w = within(e);
+    return w?.measure && w.fullFidelity ? Math.max(0, w.measure.value - w.fullFidelity.value) : undefined;
+  };
+  const p99 = (e: Evaluation) => (e.latency.status === 'sampled' ? e.latency.percentiles?.p99 : undefined);
+
+  const progress: PathProgress = { steps: [], start: value(baseline.evaluation), target: doc.objectives.succeedWithin?.target };
+  if (!doc.objectives.succeedWithin || kept(baseline.evaluation)) {
+    yield { ...progress, outcome: 'nothing-to-do' };
+    return;
+  }
+
+  let current = doc;
+  let state = baseline;
+  const applied = new Set<string>();
+  let outcome: PathOutcome = 'limit';
+  for (let step = 1; step <= maxSteps; step++) {
+    let ranked: RankedAction[] = [];
+    for (const p of rankActions(current, state, { ...options, types, limit: options.limit ?? 6 })) {
+      ranked = p.ranked;
+      yield { ...progress, searching: { step, tried: p.tried, total: p.total } };
+    }
+    const best = ranked.find((r) => r.clear && !applied.has(identity(current, r.spec)));
+    if (!best) {
+      outcome = 'stuck';
+      break;
+    }
+    applied.add(identity(current, best.spec));
+    progress.steps.push({ spec: best.spec, title: describeAction(current, best.spec).title, after: best.after });
+    current = applyAction(current, best.spec);
+    const next = evaluateDoc(current, options.seeds ?? [1, 2], options.trials ?? 20_000);
+    if (!next) {
+      outcome = 'stuck';
+      break;
+    }
+    state = next;
+    progress.steps[progress.steps.length - 1]!.after = value(state.evaluation);
+    if (kept(state.evaluation)) {
+      outcome = 'reached';
+      break;
+    }
+    yield { ...progress, searching: { step: step + 1, tried: 0, total: 0 } };
+  }
+
+  const w = within(state.evaluation);
+  yield {
+    ...progress,
+    outcome,
+    narrow: outcome === 'reached' && w?.verdict !== 'met',
+    succeedAtAll: state.evaluation.withTimeouts?.value,
+    fastShare: w?.fastShare?.value,
+    partialBefore: partial(baseline.evaluation),
+    partialAfter: partial(state.evaluation),
+    p99Before: p99(baseline.evaluation),
+    p99After: p99(state.evaluation),
+  };
+}
+
+/** Applies a path's steps in order; each step's indices refer to the doc before it. */
+export function applyPath(doc: Doc, steps: PathStep[]): Doc {
+  return steps.reduce((d, step) => applyAction(d, step.spec), doc);
+}

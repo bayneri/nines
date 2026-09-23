@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from 'react';
-import { type ActionSpec, describeAction } from '../actions';
+import { type ActionSpec, type PathStep, describeAction } from '../actions';
 import type { Analysis } from '../analysis';
-import type { ActionsState } from './App';
+import type { ActionsState, PathState } from './App';
 import { type Doc, withLatencyObjective } from '../doc';
 import type { Objectives } from '../model/inputs';
 import type { Evaluation, Measure, ObjectiveResult, Verdict } from '../model/slo';
@@ -21,6 +21,9 @@ interface Props {
   advanced: boolean;
   actions?: ActionsState;
   onApply: (spec: ActionSpec) => void;
+  path?: PathState;
+  onFindPath: (allowPartial: boolean) => void;
+  onApplyPath: (steps: PathStep[]) => void;
   onObjectives: (objectives: Objectives) => void;
   onHighlight: (target: Selection) => void;
   onSelect: (target: Selection) => void;
@@ -32,7 +35,7 @@ const find = <K extends ObjectiveResult['kind']>(objectives: ObjectiveResult[], 
   objectives.find((o): o is Extract<ObjectiveResult, { kind: K }> => o.kind === kind);
 const VERDICT: Record<Verdict, string> = { met: 'Kept', missed: 'Broken', unclear: "Can't tell yet" };
 
-export function Results({ doc, analysis, evaluation: e, baseline, advanced, actions, onApply, onObjectives, onHighlight, onSelect }: Props) {
+export function Results({ doc, analysis, evaluation: e, baseline, advanced, actions, onApply, path, onFindPath, onApplyPath, onObjectives, onHighlight, onSelect }: Props) {
   const objectives = doc.objectives;
   const within = find(e.objectives, 'succeed_within');
   const was = (pick: (ev: Evaluation) => Measure | undefined) => {
@@ -65,6 +68,7 @@ export function Results({ doc, analysis, evaluation: e, baseline, advanced, acti
 
       <Breakdown doc={doc} analysis={analysis} evaluation={e} advanced={advanced} was={was} onObjectives={onObjectives} />
       <SeparateVsCombined objectives={e.objectives} />
+      {find(e.objectives, 'succeed_within')?.verdict === 'missed' && actions?.done && <Path doc={doc} path={path} onFind={onFindPath} onApply={onApplyPath} />}
       <Actions doc={doc} evaluation={e} actions={actions} onApply={onApply} onHighlight={onHighlight} />
       {advanced && <Losses doc={doc} analysis={analysis} evaluation={e} onHighlight={onHighlight} onSelect={onSelect} />}
 
@@ -106,7 +110,7 @@ function Lead({ target, limit, result, napkin, was, onChange }: {
         {m ? (
           <>
             of requests do{m.kind === 'sampled' && <span className="faint"> (±{((m.high - m.low) * 50).toFixed(digitsFor(m))})</span>}.
-            {napkin !== undefined && <> Napkin math says {percent(napkin)}, <NapkinVerdict napkin={napkin} modeled={m.value} /></>}
+            {napkin !== undefined && <> Napkin math, which ignores time, says {percent(napkin)} succeed.</>}
             {was && <span className="was"> Was {was}.</span>}
           </>
         ) : (
@@ -185,7 +189,11 @@ function Breakdown({ doc, analysis, evaluation: e, advanced, was, onObjectives }
         <span className="factor-value">{succeed ? percent(succeed.value, digitsFor(succeed)) : '…'}</span>
         <span className="factor-note">
           {e.hasTimeouts && succeed ? `${percent(e.ignoringTime.value)} if nothing timed out. ` : ''}
-          {analysis.napkin !== undefined && `Napkin math: ${percent(analysis.napkin)}.`}
+          {analysis.napkin !== undefined && (
+            <>
+              Napkin math: {percent(analysis.napkin)}, <NapkinVerdict napkin={analysis.napkin} modeled={e.ignoringTime.value} />
+            </>
+          )}
           {was((ev) => ev.withTimeouts) && <span className="was"> Was {was((ev) => ev.withTimeouts)}.</span>}
         </span>
         {availability && (
@@ -308,10 +316,95 @@ function Actions({ doc, evaluation: e, actions, onApply, onHighlight }: { doc: D
             })}
           </ol>
           {actions.done && broken && clear.length > 0 && !clear.some((a) => a.keepsPromise) && (
-            <p className="aside">No single change keeps the promise. Apply one and the list is worked out again for what’s left.</p>
+            <p className="aside">No single change keeps the promise. Find a path above, or apply one and the list is worked out again for what’s left.</p>
           )}
           {actions.done && unclear > 0 && <p className="fine">{unclear === 1 ? 'One other change' : `${unclear} other changes`} made no clear difference.</p>}
         </>
+      )}
+    </section>
+  );
+}
+
+// ---- A path to the promise --------------------------------------------------
+
+function Path({ doc, path, onFind, onApply }: { doc: Doc; path?: PathState; onFind: (allowPartial: boolean) => void; onApply: (steps: PathStep[]) => void }) {
+  const promise = doc.objectives.succeedWithin!;
+  const allowPartial = path?.allowPartial ?? false;
+  const p = path?.progress;
+  const toggle = (
+    <label className="check small">
+      <input type="checkbox" checked={allowPartial} onChange={(e) => onFind(e.target.checked)} />
+      Allow partial answers (optional calls, some fan-out copies missing)
+    </label>
+  );
+
+  if (!path) {
+    return (
+      <section className="path idle" aria-label="Path to the promise">
+        <div>
+          <h3>What would it take?</h3>
+          <p className="section-intro">Apply the change that helps most, re-rank, repeat, until the promise is kept.</p>
+        </div>
+        <button className="primary" onClick={() => onFind(false)}>
+          Find a path to the promise
+        </button>
+      </section>
+    );
+  }
+
+  const pct = (v: number) => percent(v, Math.min(3, decimalsFor(v)));
+  const done = p?.outcome !== undefined;
+  let headline: string;
+  if (!done) headline = p?.searching ? `Step ${p.searching.step}: trying ${p.searching.total ? `${p.searching.tried} of ${p.searching.total}` : 'the best'} changes…` : 'Working out where it stands…';
+  else if (p!.outcome === 'reached') headline = p!.steps.length === 1 ? 'Kept with one change' : `Kept with ${p!.steps.length} changes`;
+  else headline = `Not kept after ${p!.steps.length} ${p!.steps.length === 1 ? 'change' : 'changes'}`;
+
+  // What remains when the path falls short: failures, or time.
+  let remaining: string | undefined;
+  if (done && p!.outcome !== 'reached' && p!.succeedAtAll !== undefined && p!.fastShare !== undefined) {
+    remaining =
+      p!.succeedAtAll >= promise.target
+        ? `What’s left is time: ${share(1 - p!.fastShare)} of successful requests take longer than ${promise.ms} ms.`
+        : `What’s left is failures: ${share(1 - p!.succeedAtAll)} of requests fail.`;
+    if (p!.outcome === 'stuck') remaining += ' None of the remaining changes tried makes a clear difference.';
+  }
+  const tradeoffs: string[] = [];
+  if (done && p!.partialAfter !== undefined && p!.partialBefore !== undefined && p!.partialAfter > p!.partialBefore + 0.0005) {
+    tradeoffs.push(`${share(p!.partialAfter - p!.partialBefore)} more answers would be partial`);
+  }
+  if (done && p!.p99After !== undefined && p!.p99Before !== undefined && p!.p99After > p!.p99Before * 1.1) tradeoffs.push(`p99 rises from ${ms(p!.p99Before)} to ${ms(p!.p99After)}`);
+
+  return (
+    <section className={`path ${done ? p!.outcome : 'running'}`} aria-label="Path to the promise" aria-busy={!done}>
+      <h3>{headline}</h3>
+      {p && (
+        <ol className="path-steps">
+          <li className="start">
+            <span>Today</span>
+            <span className="value">{pct(p.start)}</span>
+          </li>
+          {p.steps.map((step, i) => (
+            <li key={i}>
+              <span>{step.title}</span>
+              <span className="value">{pct(step.after)}</span>
+            </li>
+          ))}
+          <li className="goal">
+            <span>The promise</span>
+            <span className="value">{pct(promise.target)}</span>
+          </li>
+        </ol>
+      )}
+      {done && p!.narrow && <p className="fine">It clears the promise by less than the simulation’s margin of error.</p>}
+      {remaining && <p className="aside">{remaining}</p>}
+      {tradeoffs.length > 0 && <p className="tradeoff">Trade-off: {tradeoffs.join('; ')}.</p>}
+      {toggle}
+      {done && p!.steps.length > 0 && (
+        <div className="row-actions start">
+          <button className="primary" onClick={() => onApply(p!.steps)}>
+            Apply {p!.steps.length === 1 ? 'this change' : `all ${p!.steps.length} changes`}
+          </button>
+        </div>
       )}
     </section>
   );

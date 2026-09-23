@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type ActionSpec, type RankedAction, applyAction } from '../actions';
+import { type ActionSpec, type PathProgress, type RankedAction, applyAction, applyPath } from '../actions';
 import type { Analysis } from '../analysis';
 import { type Doc, addCall, addService, blankDoc, docProblems, makeRedundant, setObjectives, toDot, toYaml } from '../doc';
 import type { Evaluation } from '../model/slo';
@@ -23,6 +23,13 @@ export interface ActionsState {
   /** The model (as DOT + YAML) these actions were ranked for. */
   key: string;
 }
+export interface PathState {
+  progress?: PathProgress;
+  allowPartial: boolean;
+  key: string;
+}
+/** Path requests get their own ids, so they don't collide with the usual analysis. */
+let nextPathId = 1_000_000_000;
 
 const DEBOUNCE_MS = 150;
 /** Edits with the same coalesce key this close together are one undo step. */
@@ -76,6 +83,8 @@ export function App() {
   const [evaluation, setEvaluation] = useState<Evaluation>();
   const [baselines, setBaselines] = useState<Record<string, Evaluation>>({});
   const [actions, setActions] = useState<ActionsState>();
+  const [path, setPath] = useState<PathState>();
+  const pathId = useRef(0);
 
   // ---- Editing -------------------------------------------------------------
 
@@ -165,6 +174,11 @@ export function App() {
     const w = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     w.addEventListener('message', (event: MessageEvent<WorkerResponse>) => {
       const message = event.data;
+      // Path requests have their own ids; everything else belongs to the latest analysis.
+      if (message.kind === 'path') {
+        if (message.id === pathId.current) setPath((p) => (p ? { ...p, progress: message.progress } : p));
+        return;
+      }
       if (message.id !== requests.current.id) return;
       if (message.kind === 'actions') {
         setActions({ list: message.actions, tried: message.tried, total: message.total, done: message.done, key: requests.current.key });
@@ -263,6 +277,17 @@ export function App() {
       baseline={mode === 'learn' && lessonEdited ? baselines[lessonId] : undefined}
       advanced={advanced}
       actions={actions?.key === dot + yaml ? actions : undefined}
+      path={path?.key === dot + yaml ? path : undefined}
+      onFindPath={(allowPartial: boolean) => {
+        pathId.current = nextPathId++;
+        setPath({ allowPartial, key: dot + yaml });
+        const request: WorkerRequest = { id: pathId.current, dot, yaml, task: 'path', allowPartial };
+        worker.current?.postMessage(request);
+      }}
+      onApplyPath={(steps) => {
+        edit(applyPath(doc, steps));
+        setPath(undefined);
+      }}
       onApply={(spec: ActionSpec) => {
         edit(applyAction(doc, spec));
         setHighlight(undefined);
