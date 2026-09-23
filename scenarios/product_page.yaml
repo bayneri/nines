@@ -1,0 +1,11 @@
+topology: product_page.dot
+defaults:
+  transient: 0.5
+nodes:
+  product_page:    { availability: 99.99% }
+  catalog:         { availability: 99.95% }
+  pricing:         { availability: 99.95% }
+  inventory:       { availability: 99.9%, transient: 0.3 }
+  recommendations: { availability: 99.5% }
+  reviews:         { availability: 99.5% }
+  auth:            { availability: 99.95%, transient: 0.1 }

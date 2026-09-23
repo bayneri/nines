@@ -1,0 +1,9 @@
+topology: checkout.dot
+objective:
+  availability: 99.95%
+nodes:
+  checkout:  { availability: 99.99%, transient: 0.5 }
+  # Mostly flaky requests: retries help a lot here.
+  payments:  { availability: 99.9%,  transient: 0.9 }
+  # Failures are outages: retries don't help at all.
+  ledger_db: { availability: 99.95%, transient: 0 }

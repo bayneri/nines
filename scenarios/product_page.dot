@@ -1,0 +1,17 @@
+// Recommendations and reviews are already soft. Inventory is hard only
+// because the page shows "in stock"; it could be confirmed at checkout.
+digraph product_page {
+    graph [entry=product_page, label="Soft dependency beats a nine"];
+
+    product_page -> catalog;
+    product_page -> pricing;
+    product_page -> inventory;
+    product_page -> recommendations [dependency=soft, timeout_ms=150];
+    product_page -> reviews         [dependency=soft, timeout_ms=150];
+
+    catalog -> auth;
+    pricing -> auth;
+    inventory -> auth;
+
+    auth [kind=infra];
+}

@@ -1,0 +1,17 @@
+// Two regions look like independent redundancy, but both depend on one
+// control plane. Napkin math multiplies the regions' failure rates; the
+// shared control plane caps what the pair can deliver.
+digraph multi_region {
+    graph [entry=frontend, label="Multi-region that isn't"];
+
+    frontend -> app;
+
+    app [type=any, label="app (either region)"];
+    app -> app_us_east;
+    app -> app_eu_west;
+
+    app_us_east -> control_plane;
+    app_eu_west -> control_plane;
+
+    control_plane [kind=infra];
+}

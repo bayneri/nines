@@ -1,0 +1,10 @@
+// Every search request queries all 100 shards. A shard that is fine on its
+// own dominates the request once you multiply by 100: most requests touch
+// at least one shard's tail.
+digraph search {
+    graph [entry=search_api, label="The 100-shard fan-out"];
+
+    search_api -> query_parser [stage=0, timeout_ms=50];
+    search_api -> shard        [stage=1, fanout=100, timeout_ms=300];
+    search_api -> ranker       [stage=2, timeout_ms=100];
+}

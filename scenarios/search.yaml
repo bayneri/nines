@@ -1,0 +1,11 @@
+topology: search.dot
+objective:
+  availability: 99.9%
+  latency_p99_ms: 400
+defaults:
+  transient: 0.5
+nodes:
+  search_api:   { availability: 99.99%, latency: { p50_ms: 5,  p99_ms: 20 } }
+  query_parser: { availability: 99.99%, latency: { p50_ms: 3,  p99_ms: 15 } }
+  shard:        { availability: 99.99%, latency: { p50_ms: 25, p99_ms: 180 } }
+  ranker:       { availability: 99.95%, latency: { p50_ms: 15, p99_ms: 60 } }
