@@ -33,6 +33,8 @@ export interface PathState {
 let nextPathId = 1_000_000_000;
 
 const DEBOUNCE_MS = 150;
+/** Set once someone has dismissed the "What is nines?" dialog. */
+const SEEN_ABOUT = 'nines.seenAbout';
 /** Edits with the same coalesce key this close together are one undo step. */
 const COALESCE_MS = 800;
 /** Losses below this share of requests aren't drawn on the graph. */
@@ -65,7 +67,22 @@ export function App() {
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const [showLosses, setShowLosses] = useState(true);
   const [showCode, setShowCode] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
+  // First-time visitors get the explanation without having to find the button.
+  const [aboutOpen, setAboutOpen] = useState(() => {
+    try {
+      return localStorage.getItem(SEEN_ABOUT) !== '1';
+    } catch {
+      return false; // Storage unavailable: don't show it on every visit.
+    }
+  });
+  const closeAbout = useCallback(() => {
+    setAboutOpen(false);
+    try {
+      localStorage.setItem(SEEN_ABOUT, '1');
+    } catch {
+      // Not remembered; it just won't open by itself next time either.
+    }
+  }, []);
   // Targets someone removed, so adding one back restores what they had.
   const lastTargets = useRef<LastTargets>({});
 
@@ -403,9 +420,9 @@ export function App() {
 
       <About
         open={aboutOpen}
-        onClose={() => setAboutOpen(false)}
+        onClose={closeAbout}
         onStart={() => {
-          setAboutOpen(false);
+          closeAbout();
           setMode('learn');
           openLesson(SCENARIOS[0]!.id);
         }}
