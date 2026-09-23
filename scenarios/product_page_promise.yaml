@@ -3,13 +3,14 @@
 topology: product_page.dot
 objective:
   availability: 99.99%
+  latency_ms: 300
 defaults:
   transient: 0.5
 nodes:
-  product_page:    { availability: 99.99% }
-  catalog:         { availability: 99.95% }
-  pricing:         { availability: 99.95% }
-  inventory:       { availability: 99.9%, transient: 0.3 }
-  recommendations: { availability: 99.5% }
-  reviews:         { availability: 99.5% }
-  auth:            { availability: 99.95%, transient: 0.1 }
+  product_page:    { availability: 99.99%, latency: { p50_ms: 10, p99_ms: 40 } }
+  catalog:         { availability: 99.95%, latency: { p50_ms: 20, p99_ms: 100 } }
+  pricing:         { availability: 99.95%, latency: { p50_ms: 15, p99_ms: 80 } }
+  inventory:       { availability: 99.9%, transient: 0.3, latency: { p50_ms: 25, p99_ms: 150 } }
+  recommendations: { availability: 99.5%, latency: { p50_ms: 40, p99_ms: 200 } }
+  reviews:         { availability: 99.5%, latency: { p50_ms: 30, p99_ms: 120 } }
+  auth:            { availability: 99.95%, transient: 0.1, latency: { p50_ms: 4, p99_ms: 20 } }

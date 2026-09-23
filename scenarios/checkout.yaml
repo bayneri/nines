@@ -1,9 +1,10 @@
 topology: checkout.dot
 objective:
   availability: 99.95%
+  latency_ms: 1000
 nodes:
-  checkout:  { availability: 99.99%, transient: 0.5 }
-  # Mostly flaky requests: retries help a lot here.
-  payments:  { availability: 99.9%,  transient: 0.9 }
+  checkout:  { availability: 99.99%, transient: 0.5, latency: { p50_ms: 15,  p99_ms: 60 } }
+  # Mostly flaky requests: retries help a lot here, but each one costs time.
+  payments:  { availability: 99.9%,  transient: 0.9, latency: { p50_ms: 150, p99_ms: 700 } }
   # Failures are outages: retries don't help at all.
-  ledger_db: { availability: 99.95%, transient: 0 }
+  ledger_db: { availability: 99.95%, transient: 0,   latency: { p50_ms: 10,  p99_ms: 80 } }

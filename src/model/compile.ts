@@ -24,6 +24,15 @@ export interface CompiledEdge {
   retries: number;
   /** The call covers the target's first `classesCovered` instance classes. */
   classesCovered: number;
+  stage: number;
+  /** Infinity when the caller waits for as long as the call takes. */
+  timeoutMs: number;
+}
+
+/** Lognormal latency fitted to p50 and p99: ln(latency) ~ Normal(mu, sigma). */
+export interface LatencyModel {
+  mu: number;
+  sigma: number;
 }
 
 export interface CompiledNode {
@@ -42,7 +51,11 @@ export interface CompiledNode {
   outage: number;
   /** P(one attempt fails transiently), given the instance isn't in an outage. */
   transientFail: number;
+  /** The node's own latency per attempt, excluding its calls. Services only. */
+  latency?: LatencyModel;
   edges: CompiledEdge[];
+  /** Service calls grouped by stage, in stage order. */
+  stages: CompiledEdge[][];
 }
 
 export interface CompiledModel {
@@ -63,6 +76,13 @@ export function failureModel(availability: number, transient: number): { outage:
   const outage = unavailability * (1 - transient);
   const transientFail = outage >= 1 ? 0 : (unavailability * transient) / (1 - outage);
   return { outage, transientFail };
+}
+
+/** z-score of the 99th percentile of the standard normal. */
+const Z99 = 2.3263478740408408;
+
+export function latencyModel(p50Ms: number, p99Ms: number): LatencyModel {
+  return { mu: Math.log(p50Ms), sigma: Math.log(p99Ms / p50Ms) / Z99 };
 }
 
 export function compile(topology: Topology, inputs: Inputs): CompiledModel {
@@ -112,8 +132,14 @@ export function compile(topology: Topology, inputs: Inputs): CompiledModel {
         fanoutRequire: edge.fanoutRequire,
         retries: edge.retries,
         classesCovered: sortedBoundaries.get(edge.to)!.indexOf(edge.fanout) + 1,
+        stage: edge.stage,
+        timeoutMs: edge.timeoutMs ?? Infinity,
       })),
+      stages: [],
     };
+    if (own?.latency) compiled.latency = latencyModel(own.latency.p50Ms, own.latency.p99Ms);
+    const stageNumbers = [...new Set(compiled.edges.map((e) => e.stage))].sort((a, b) => a - b);
+    compiled.stages = stageNumbers.map((n) => compiled.edges.filter((e) => e.stage === n));
     offset += compiled.instances;
     classOffset += bounds.length;
     return compiled;

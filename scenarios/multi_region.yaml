@@ -1,10 +1,12 @@
 topology: multi_region.dot
 objective:
   availability: 99.99%
+  latency_ms: 500
 nodes:
-  frontend:      { availability: 99.99%, transient: 0.5 }
-  app_us_east:   { availability: 99.9%,  transient: 0.2 }
-  app_eu_west:   { availability: 99.9%,  transient: 0.2 }
+  frontend:      { availability: 99.99%, transient: 0.5, latency: { p50_ms: 5,   p99_ms: 20 } }
+  # Failover goes to the farther region.
+  app_us_east:   { availability: 99.9%,  transient: 0.2, latency: { p50_ms: 40,  p99_ms: 250 } }
+  app_eu_west:   { availability: 99.9%,  transient: 0.2, latency: { p50_ms: 120, p99_ms: 400 } }
   # Control-plane failures are outages, not blips: retries and failover
   # to the other region don't help.
-  control_plane: { availability: 99.95%, transient: 0 }
+  control_plane: { availability: 99.95%, transient: 0,   latency: { p50_ms: 3,   p99_ms: 15 } }

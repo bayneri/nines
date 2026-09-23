@@ -28,6 +28,12 @@ export interface AvailabilityResult {
   fullFidelity: number;
   /** Probability of the outage states not enumerated; both figures are exact to within this. */
   truncation: number;
+  /**
+   * False when enumeration stopped (at `maxStates`, or at MAX_DEPTH
+   * simultaneous outages) before reaching `tolerance`. The figures are then
+   * estimates: the true values lie in [value, value + truncation].
+   */
+  exhaustive: boolean;
   statesEvaluated: number;
 }
 
@@ -143,19 +149,24 @@ export function evaluate(model: CompiledModel, options: ModelOptions = {}): Avai
     }
   };
 
-  const entryCall: CompiledEdge = { target: model.entry, dependency: 'hard', fanout: 1, fanoutRequire: 1, retries: 0, classesCovered: 1 };
+  const entryCall: CompiledEdge = { target: model.entry, dependency: 'hard', fanout: 1, fanoutRequire: 1, retries: 0, classesCovered: 1, stage: 0, timeoutMs: Infinity };
 
   const variables = outageVariables(nodes);
   const totalOutages = convolve(variables.map((v) => v.pmf));
   const statesAtTotal = convolve(variables.map((v) => new Array<number>(Math.min(v.size, MAX_DEPTH) + 1).fill(1)));
 
   // Deepest total number of simultaneous outages to enumerate.
+  const outageInstances = variables.reduce((sum, v) => sum + v.size, 0);
   let depth = 0;
   let covered = totalOutages[0]!;
   let planned = 1;
-  while (1 - covered > tolerance && depth + 1 < totalOutages.length) {
-    const next = statesAtTotal[depth + 1]!;
-    if (planned + next > maxStates) break;
+  let stoppedEarly = false;
+  while (1 - covered > tolerance && depth < outageInstances) {
+    const next = statesAtTotal[depth + 1];
+    if (next === undefined || planned + next > maxStates) {
+      stoppedEarly = true;
+      break;
+    }
     planned += next;
     depth++;
     covered += totalOutages[depth]!;
@@ -183,7 +194,9 @@ export function evaluate(model: CompiledModel, options: ModelOptions = {}): Avai
   };
   visit(0, depth, 1);
 
-  return { availability, fullFidelity, truncation: Math.max(0, 1 - covered), statesEvaluated };
+  // Every state enumerated: what's left of 1 - covered is rounding, not mass.
+  const truncation = depth === outageInstances ? 0 : Math.max(0, 1 - covered);
+  return { availability, fullFidelity, truncation, exhaustive: !stoppedEarly, statesEvaluated };
 }
 
 function outageVariables(nodes: CompiledNode[]): OutageVariable[] {

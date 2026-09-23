@@ -19,7 +19,7 @@ describe('parseInputs', () => {
   it('resolves every service node, merging defaults field by field', () => {
     const { value, diagnostics } = parse(`
 topology: shop.dot
-objective: { availability: 99.9%, latency_p99_ms: 300 }
+objective: { availability: 99.9%, latency_ms: 300 }
 defaults: { availability: 0.999, transient: 0.5, latency: { p50_ms: 10, p99_ms: 50 } }
 nodes:
   web:  { availability: 99.99% }
@@ -28,7 +28,7 @@ nodes:
 `);
     expect(diagnostics).toEqual([]);
     expect(value!.topology).toBe('shop.dot');
-    expect(value!.objective).toEqual({ availability: 0.999, latencyP99Ms: 300 });
+    expect(value!.objective).toEqual({ availability: 0.999, latencyMs: 300 });
     expect(value!.nodes.get('web')!.availability).toBeCloseTo(0.9999, 12);
     expect(value!.nodes.get('web')!.transient).toBe(0.5);
     expect(value!.nodes.get('api')).toEqual({ availability: 0.999, transient: 0, latency: { p50Ms: 20, p99Ms: 200 } });

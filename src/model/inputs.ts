@@ -23,8 +23,10 @@ export interface NodeInputs {
 }
 
 export interface Objective {
+  /** Target fraction of requests that succeed (and, with latencyMs, succeed in time). */
   availability?: number;
-  latencyP99Ms?: number;
+  /** A request counts as good only if it succeeds within this many milliseconds. */
+  latencyMs?: number;
 }
 
 export interface Inputs {
@@ -38,7 +40,7 @@ export interface Inputs {
 }
 
 const TOP_KEYS = ['topology', 'objective', 'defaults', 'nodes'] as const;
-const OBJECTIVE_KEYS = ['availability', 'latency_p99_ms'] as const;
+const OBJECTIVE_KEYS = ['availability', 'latency_ms'] as const;
 const NODE_KEYS = ['availability', 'transient', 'latency'] as const;
 const LATENCY_KEYS = ['p50_ms', 'p99_ms'] as const;
 
@@ -156,8 +158,8 @@ export function parseInputs(source: string, topology: Topology): ParseResult<Inp
     checkKeys(objectiveMap, OBJECTIVE_KEYS, ['objective'], '`objective`');
     const a = availability(objectiveMap.availability, ['objective', 'availability'], 'objective availability');
     if (a !== undefined) objective.availability = a;
-    const l = positive(objectiveMap.latency_p99_ms, ['objective', 'latency_p99_ms'], 'objective latency_p99_ms');
-    if (l !== undefined) objective.latencyP99Ms = l;
+    const l = positive(objectiveMap.latency_ms, ['objective', 'latency_ms'], 'objective latency_ms');
+    if (l !== undefined) objective.latencyMs = l;
   }
 
   const defaults = root.defaults === undefined ? {} : nodeInputs(root.defaults, ['defaults'], '`defaults`') ?? {};

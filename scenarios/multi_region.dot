@@ -7,7 +7,7 @@ digraph multi_region {
     frontend -> app;
 
     app [type=any, label="app (either region)"];
-    app -> app_us_east;
+    app -> app_us_east [timeout_ms=300];
     app -> app_eu_west;
 
     app_us_east -> control_plane;

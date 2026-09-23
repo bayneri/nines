@@ -1,7 +1,7 @@
 topology: search.dot
 objective:
   availability: 99.9%
-  latency_p99_ms: 400
+  latency_ms: 400
 defaults:
   transient: 0.5
 nodes:
