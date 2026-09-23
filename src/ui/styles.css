@@ -217,10 +217,82 @@ input[type='checkbox'] {
   background: var(--surface);
 }
 .brand {
-  margin-right: 18px;
+  margin-right: 2px;
   font: 700 19px/1 var(--mono);
   letter-spacing: -0.04em;
 }
+.about-trigger {
+  margin-right: 14px;
+}
+
+/* About dialog */
+.about {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lift);
+}
+.about::backdrop {
+  background: rgb(20 19 17 / 45%);
+}
+.about-body {
+  padding: 22px 26px 22px;
+}
+.about header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.about h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.about h3 {
+  margin: 20px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.about p,
+.about li {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.about p {
+  margin: 8px 0 0;
+}
+.about strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.about-lead {
+  color: var(--text) !important;
+  font-size: 15px !important;
+}
+.about ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.about li + li {
+  margin-top: 4px;
+}
+.about p .icon {
+  vertical-align: -2px;
+}
+.about-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+}
+
 .mode-switch {
   display: inline-flex;
   gap: 2px;
@@ -1639,8 +1711,8 @@ details[open] > summary .icon {
   .mode-switch button {
     padding: 0 8px;
   }
-  .brand {
-    margin-right: 8px;
+  .about-trigger {
+    margin-right: 6px;
   }
   .canvas-tools {
     flex-wrap: wrap;

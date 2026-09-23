@@ -4,6 +4,7 @@ import type { Analysis } from '../analysis';
 import { type Doc, addCall, addService, blankDoc, docProblems, makeRedundant, setObjectives, toDot, toYaml } from '../doc';
 import type { Evaluation } from '../model/slo';
 import { SCENARIOS } from '../scenarios';
+import { About } from './About';
 import { CodeView } from './CodeView';
 import { Graph, type LossOverlay, type Selection } from './Graph';
 import { Icon } from './icons';
@@ -64,6 +65,7 @@ export function App() {
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const [showLosses, setShowLosses] = useState(true);
   const [showCode, setShowCode] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   // Targets someone removed, so adding one back restores what they had.
   const lastTargets = useRef<LastTargets>({});
 
@@ -294,6 +296,9 @@ export function App() {
     <div className={`app mode-${mode}`}>
       <header className="topbar">
         <span className="brand">nines</span>
+        <button className="icon-button about-trigger" onClick={() => setAboutOpen(true)} aria-label="What is nines?" title="What is nines?">
+          <Icon name="info" size={17} />
+        </button>
         <div className="mode-switch" role="tablist" aria-label="Mode">
           <button role="tab" aria-selected={mode === 'learn'} onClick={() => switchMode('learn')}>
             <Icon name="book" size={15} /> Learn
@@ -395,6 +400,16 @@ export function App() {
           {pane}
         </aside>
       </div>
+
+      <About
+        open={aboutOpen}
+        onClose={() => setAboutOpen(false)}
+        onStart={() => {
+          setAboutOpen(false);
+          setMode('learn');
+          openLesson(SCENARIOS[0]!.id);
+        }}
+      />
     </div>
   );
 }
