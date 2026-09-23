@@ -49,3 +49,14 @@ describe('share', () => {
     expect([share(0.154), share(0.01), share(0.0005), share(0.000099999), share(0)]).toEqual(['15.4%', '1.0%', '0.050%', '0.010%', '0%']);
   });
 });
+
+describe('failureMode', () => {
+  it('agrees with the typical-value summaries', async () => {
+    const { failureMode } = await import('../src/ui/words');
+    const { TYPICAL } = await import('../src/doc');
+    for (const t of Object.values(TYPICAL)) {
+      const words = failureMode(t.transient).toLowerCase();
+      expect(t.summary, `${t.transient} is "${words}"`).toContain(words === 'mixed failures' ? 'mixed failures' : words);
+    }
+  });
+});

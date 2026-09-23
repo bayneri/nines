@@ -68,6 +68,17 @@ const dotId = (id: string) => (PLAIN_ID.test(id) ? id : `"${id.replace(/\\/g, '\
 
 export function toDot(doc: Doc): string {
   const lines = [`digraph ${dotId(doc.name)} {`, `    graph [entry=${dotId(doc.entry)}];`, ''];
+  // Every node first, in doc order: DOT orders nodes by first mention.
+  for (const n of doc.nodes) {
+    const attrs: string[] = [];
+    if (n.type !== 'service') attrs.push(`type=${n.type}`);
+    if (n.type === 'quorum' && n.require !== undefined) attrs.push(`require=${n.require}`);
+    if (n.infra) attrs.push('kind=infra');
+    if (n.icon !== undefined) attrs.push(`icon=${n.icon}`);
+    if (n.label !== undefined) attrs.push(`label=${JSON.stringify(n.label)}`);
+    lines.push(`    ${dotId(n.id)}${attrs.length ? ` [${attrs.join(', ')}]` : ''};`);
+  }
+  if (doc.calls.length > 0) lines.push('');
   for (const c of doc.calls) {
     const attrs: string[] = [];
     if (c.dependency !== 'hard') attrs.push(`dependency=${c.dependency}`);
@@ -78,20 +89,6 @@ export function toDot(doc: Doc): string {
     if (c.timeoutMs !== undefined) attrs.push(`timeout_ms=${c.timeoutMs}`);
     lines.push(`    ${dotId(c.from)} -> ${dotId(c.to)}${attrs.length ? ` [${attrs.join(', ')}]` : ''};`);
   }
-
-  const inCalls = new Set(doc.calls.flatMap((c) => [c.from, c.to]));
-  const declarations: string[] = [];
-  for (const n of doc.nodes) {
-    const attrs: string[] = [];
-    if (n.type !== 'service') attrs.push(`type=${n.type}`);
-    if (n.type === 'quorum' && n.require !== undefined) attrs.push(`require=${n.require}`);
-    if (n.infra) attrs.push('kind=infra');
-    if (n.icon !== undefined) attrs.push(`icon=${n.icon}`);
-    if (n.label !== undefined) attrs.push(`label=${JSON.stringify(n.label)}`);
-    if (attrs.length > 0) declarations.push(`    ${dotId(n.id)} [${attrs.join(', ')}];`);
-    else if (!inCalls.has(n.id)) declarations.push(`    ${dotId(n.id)};`);
-  }
-  if (declarations.length > 0) lines.push('', ...declarations);
   lines.push('}');
   return lines.join('\n') + '\n';
 }
@@ -185,10 +182,8 @@ export function uniqueId(doc: Doc, base: string): string {
 /** Adds a service; when `caller` is given, also a call to it. */
 export function addService(doc: Doc, caller?: string): { doc: Doc; id: string } {
   const id = uniqueId(doc, 'service');
-  const services = doc.nodes.filter((n) => n.type === 'service');
-  const node: DocNode = { id, type: 'service', infra: false, availability: 0.999, transient: 0.5 };
-  // Keep latency modeled if every other service has it.
-  if (services.length > 0 && services.every((n) => n.latency)) node.latency = { p50Ms: 20, p99Ms: 100 };
+  const t = TYPICAL.service;
+  const node: DocNode = { id, type: 'service', infra: false, availability: t.availability, transient: t.transient, latency: { ...t.latency } };
   let next: Doc = { ...doc, nodes: [...doc.nodes, node] };
   if (caller) {
     const added = addCall(next, caller, id);
@@ -312,8 +307,82 @@ export function blankDoc(): Doc {
   return {
     name: 'my_system',
     entry: 'frontend',
-    nodes: [{ id: 'frontend', type: 'service', infra: false, icon: 'web', availability: 0.999, transient: 0.5, latency: { p50Ms: 20, p99Ms: 100 } }],
+    nodes: [{ id: 'frontend', type: 'service', infra: false, icon: 'web', availability: TYPICAL.web.availability, transient: TYPICAL.web.transient, latency: { ...TYPICAL.web.latency } }],
     calls: [],
-    objectives: { availability: 0.999, latency: [{ percentile: 0.99, ms: 300 }] },
+    objectives: { latency: [], succeedWithin: { ms: 500, target: 0.999 } },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Defaults. A service's kind implies typical numbers, so most people never
+// have to type one. Values that still equal their kind's typical ones count
+// as "typical" and follow the kind when it changes; edited values stay put.
+
+export interface Typical {
+  availability: number;
+  transient: number;
+  latency: { p50Ms: number; p99Ms: number };
+  /** In words, for the inspector. */
+  summary: string;
+}
+
+export const TYPICAL: Record<NodeIcon, Typical> = {
+  web: { availability: 0.9995, transient: 0.5, latency: { p50Ms: 10, p99Ms: 50 }, summary: '99.95%, mixed failures, 10–50 ms' },
+  service: { availability: 0.999, transient: 0.5, latency: { p50Ms: 20, p99Ms: 100 }, summary: '99.9%, mixed failures, 20–100 ms' },
+  database: { availability: 0.9995, transient: 0.3, latency: { p50Ms: 5, p99Ms: 60 }, summary: '99.95%, mostly outages, 5–60 ms' },
+  queue: { availability: 0.999, transient: 0.7, latency: { p50Ms: 5, p99Ms: 40 }, summary: '99.9%, mostly flaky, 5–40 ms' },
+  infra: { availability: 0.9999, transient: 0.2, latency: { p50Ms: 3, p99Ms: 20 }, summary: '99.99%, mostly outages, 3–20 ms' },
+};
+
+export function isTypical(node: DocNode, kind: NodeIcon): boolean {
+  const t = TYPICAL[kind];
+  return (
+    node.availability === t.availability &&
+    node.transient === t.transient &&
+    node.latency?.p50Ms === t.latency.p50Ms &&
+    node.latency?.p99Ms === t.latency.p99Ms
+  );
+}
+
+/** Changes a service's kind; typical values follow it, edited ones don't. */
+export function setKind(doc: Doc, id: string, kind: NodeIcon): Doc {
+  const node = doc.nodes.find((n) => n.id === id)!;
+  const typical = isTypical(node, iconFor(doc, node));
+  const t = TYPICAL[kind];
+  return replaceNode(doc, id, {
+    icon: kind,
+    infra: kind === 'infra',
+    ...(typical ? { availability: t.availability, transient: t.transient, latency: { ...t.latency } } : {}),
+  });
+}
+
+export function resetToTypical(doc: Doc, id: string): Doc {
+  const node = doc.nodes.find((n) => n.id === id)!;
+  const t = TYPICAL[iconFor(doc, node)];
+  return replaceNode(doc, id, { availability: t.availability, transient: t.transient, latency: { ...t.latency } });
+}
+
+/**
+ * Makes a service redundant in one step: callers now reach "either it or a
+ * fallback copy", and the copy calls the same dependencies, so shared
+ * dependencies stay shared.
+ */
+export function makeRedundant(doc: Doc, id: string): { doc: Doc; group: string } | string {
+  const node = doc.nodes.find((n) => n.id === id);
+  if (!node || node.type !== 'service') return 'Only a service can be made redundant.';
+  const group = uniqueId(doc, `${id}_either`);
+  const fallback = uniqueId(doc, `${id}_fallback`);
+  const name = displayName(node);
+  const copy: DocNode = { ...node, id: fallback, label: `${name} fallback`, latency: node.latency && { ...node.latency } };
+  const groupNode: DocNode = { id: group, type: 'any', infra: false, label: `${name} or its fallback`, availability: 1, transient: 0.5 };
+  const index = doc.nodes.findIndex((n) => n.id === id);
+  const nodes = [...doc.nodes.slice(0, index), groupNode, node, copy, ...doc.nodes.slice(index + 1)];
+  const member = (to: string): DocCall => ({ from: group, to, dependency: 'hard', fanout: 1, fanoutRequire: 1, retries: 0, stage: 0 });
+  const calls = [
+    ...doc.calls.map((c) => (c.to === id ? { ...c, to: group } : c)),
+    member(id),
+    member(fallback),
+    ...doc.calls.filter((c) => c.from === id).map((c) => ({ ...c, from: fallback })),
+  ];
+  return { doc: { ...doc, entry: doc.entry === id ? group : doc.entry, nodes, calls }, group };
 }

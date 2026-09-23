@@ -24,21 +24,36 @@ interface Props {
   onPick?: (id: string) => void;
 }
 
+/** Small graphs are drawn up to this much larger than their natural size. */
+const MAX_SCALE = 1.4;
+
 /** The dependency graph: cards and rounded elbow calls, laid out by dagre. */
 export function Graph({ doc, selection, highlight, losses, onSelect, onPick }: Props) {
   const layout = useMemo(() => layoutDoc(doc), [doc]);
   const frame = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const [space, setSpace] = useState({ width: 0, height: 0 });
   const [hovered, setHovered] = useState<string>();
 
+  // Fill the canvas: scale up small graphs, fit large ones to the width.
   useEffect(() => {
-    if (!frame.current) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(entry!.contentRect.width));
-    observer.observe(frame.current);
+    const container = frame.current?.parentElement;
+    if (!container) return;
+    const observer = new ResizeObserver(() => {
+      const style = getComputedStyle(container);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      setSpace({ width: container.clientWidth - padX, height: container.clientHeight - padY });
+    });
+    observer.observe(container);
     return () => observer.disconnect();
   }, []);
-  const scale = width > 0 ? Math.min(1, width / layout.width) : 1;
-  const offset = Math.max(0, (width - layout.width * scale) / 2);
+  const fitWidth = space.width > 0 ? space.width / layout.width : 1;
+  const fitHeight = space.height > 0 ? space.height / layout.height : 1;
+  let scale = Math.min(MAX_SCALE, fitWidth, fitHeight);
+  // Rather than shrink a tall graph to illegibility, fit its width and scroll.
+  if (scale < Math.min(1, fitWidth) * 0.75) scale = Math.min(1, fitWidth);
+  const offsetX = Math.max(0, (space.width - layout.width * scale) / 2);
+  const offsetY = Math.max(0, (space.height - layout.height * scale) / 2);
 
   // A shared dependency lights up with the calls into it while hovered or selected.
   const focusNode = selection?.kind === 'node' ? selection.id : hovered;
@@ -50,12 +65,12 @@ export function Graph({ doc, selection, highlight, losses, onSelect, onPick }: P
     <div
       ref={frame}
       className={`graph${onPick ? ' picking' : ''}`}
-      style={{ height: layout.height * scale }}
+      style={{ height: Math.max(space.height, layout.height * scale) }}
       onClick={(e) => {
         if (e.target === e.currentTarget || (e.target as Element).classList.contains('graph-inner')) onSelect(undefined);
       }}
     >
-      <div className="graph-inner" style={{ width: layout.width, height: layout.height, left: offset, transform: `scale(${scale})` }}>
+      <div className="graph-inner" style={{ width: layout.width, height: layout.height, left: offsetX, top: offsetY, transform: `scale(${scale})` }}>
         <svg width={layout.width} height={layout.height} aria-hidden="true">
           <path className="ingress" d={layout.ingress.path} />
           {layout.edges.map((edge) => {

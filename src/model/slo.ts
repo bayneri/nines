@@ -38,7 +38,17 @@ export type Verdict = 'met' | 'missed' | 'unclear';
 export type ObjectiveResult =
   | { kind: 'availability'; target: number; measure?: Measure; verdict: Verdict; reason?: string }
   | { kind: 'latency'; percentile: number; ms: number; measure?: Measure; observedMs?: number; verdict: Verdict; reason?: string }
-  | { kind: 'succeed_within'; ms: number; target: number; measure?: Measure; fullFidelity?: Measure; verdict: Verdict; reason?: string };
+  | {
+      kind: 'succeed_within';
+      ms: number;
+      target: number;
+      measure?: Measure;
+      fullFidelity?: Measure;
+      /** Of the requests that succeed, the share that answer within `ms`. */
+      fastShare?: Measure;
+      verdict: Verdict;
+      reason?: string;
+    };
 
 export type LatencyState =
   | { status: 'missing'; nodes: string[] }
@@ -152,7 +162,9 @@ export function evaluateObjectives(
       // a degraded member in one and a complete one in the other), so it is
       // sampled directly.
       const fullFidelity: Measure = { ...wilson(countAtMost(run.fullSuccessLatencies, ms), run.trials), kind: 'sampled' };
-      objectives.push({ kind: 'succeed_within', ms, target, measure, fullFidelity, verdict: verdict(measure, target) });
+      const fastShare: Measure | undefined =
+        run.successLatencies.length > 0 ? { ...wilson(countAtMost(run.successLatencies, ms), run.successLatencies.length), kind: 'sampled' } : undefined;
+      objectives.push({ kind: 'succeed_within', ms, target, measure, fullFidelity, fastShare, verdict: verdict(measure, target) });
     }
   }
 

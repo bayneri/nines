@@ -14,10 +14,12 @@ import searchYaml from '../scenarios/search.yaml?raw';
 export interface Scenario {
   id: string;
   title: string;
-  /** What the scenario shows as loaded. */
-  lesson: string;
-  /** One edit worth trying: applied by a button, then explained. */
-  tryIt: { label: string; apply: (doc: Doc) => Doc; result: string };
+  /** Two sentences at most: what this lesson shows. */
+  summary: string;
+  /** The deeper explanation, revealed on request. */
+  more: string;
+  /** One experiment: applied by a button, then explained. */
+  tryIt: { label: string; apply: (doc: Doc) => Doc; result: string; more?: string };
   dot: string;
   yaml: string;
 }
@@ -29,13 +31,13 @@ const SOURCES: Scenario[] = [
   {
     id: 'multi_region',
     title: "Multi-region that isn't",
-    lesson:
-      'Two 99.9% regions look like six nines of redundancy, and napkin math agrees. But both regions depend on one control plane whose failures are outages, so the pair can never beat it.',
+    summary: 'Two 99.9% regions should cover for each other. They can’t: both depend on one control plane.',
+    more: 'Napkin math multiplies the regions’ failure rates and predicts six nines. But the control plane fails by outage, which takes out both regions at once, so the pair can never be more available than it is. Redundancy only multiplies away failures that are independent.',
     tryIt: {
       label: 'Make control-plane failures flaky',
       apply: (doc) => updateNode(doc, 'control_plane', { transient: 1 }),
-      result:
-        'Flaky failures are independent per attempt, so the regions really do cover for each other and the model reaches the napkin number. Same availability on paper, very different failure mode.',
+      result: 'Now the regions really do cover for each other, and availability matches napkin math.',
+      more: 'Flaky failures are independent from one request to the next, so a failure behind one region rarely lines up with one behind the other. Same 99.95% on paper, a very different way of failing.',
     },
     dot: multiRegionDot,
     yaml: multiRegionYaml,
@@ -43,13 +45,13 @@ const SOURCES: Scenario[] = [
   {
     id: 'search',
     title: 'The 100-shard fan-out',
-    lesson:
-      'Ignoring time, napkin math is right: 98.9%. But each request waits for the slowest of 100 shards, and the 300 ms shard timeout turns that tail into errors: about 1 in 6 requests fail. The p99 promise still passes, because the slow requests became failures.',
+    summary: 'Every request waits for the slowest of 100 shards, so a rare slow shard becomes the common case.',
+    more: 'Ignoring time, napkin math is right: 98.9% of requests succeed. But a shard is slower than its 300 ms timeout about once in 600 calls, and with 100 shards per request that happens to about 1 request in 6, which then fails. The p99 of successful requests still looks healthy, because the slow requests became failures instead.',
     tryIt: {
       label: 'Tolerate 5 missing shards',
       apply: (doc) => updateCall(doc, callIndex(doc, 'search_api', 'shard'), { fanoutRequire: 95 }),
-      result:
-        'Availability goes from 83% to about 99.8%, still short of 99.9%. And the rescued answers are partial: full-fidelity success stays where it was.',
+      result: 'Success jumps from 83% to about 99.8%, but those answers are now partial.',
+      more: 'Waiting for 95 of 100 shards absorbs the slow tail. It still falls short of 99.9%, and answers with every shard included don’t improve at all.',
     },
     dot: searchDot,
     yaml: searchYaml,
@@ -57,27 +59,27 @@ const SOURCES: Scenario[] = [
   {
     id: 'checkout',
     title: "Retries don't save you",
-    lesson:
-      "Retries recover payments' flaky errors, but not ledger outages, which last across every retry. Each retry also costs time: 99.9% availability and p99 ≤ 800 ms are both met, yet the promise that 99.9% of requests succeed within 800 ms is missed.",
+    summary: 'Retries fix flaky errors, not outages, and every retry costs time.',
+    more: 'Payments fails mostly in flaky ways, so three retries recover it. The ledger fails by outage, which lasts through every retry. The retries also add latency: 99.9% availability and a p99 under 800 ms both hold, yet only about 99.25% of requests succeed within 800 ms.',
     tryIt: {
       label: 'Remove the retries',
       apply: (doc) => updateCall(doc, callIndex(doc, 'checkout', 'payments'), { retries: 0 }),
-      result:
-        'Availability falls to about 99.2%: a payments call slower than its 800 ms timeout now fails outright instead of getting a second chance.',
+      result: 'Availability drops to about 99.2%: slow payments calls now fail at the 800 ms timeout.',
+      more: 'Without a second attempt, any payments call slower than its timeout becomes an error.',
     },
     dot: checkoutDot,
     yaml: checkoutYaml,
   },
   {
     id: 'product_page',
-    title: 'Soft dependency beats a nine',
-    lesson:
-      'Napkin math is pessimistic here: it counts the shared auth dependency once per caller, three times, as if each call could fail independently. Inventory is a hard dependency only because the page shows "in stock".',
+    title: 'Optional beats a nine',
+    summary: 'Making inventory optional wins more than making it ten times more reliable.',
+    more: 'Inventory is required only because the page shows stock. If the page can load without it, availability rises to 99.84%, versus 99.82% if inventory were 99.99% available. Napkin math is pessimistic here: it counts the shared auth service three times, once per caller.',
     tryIt: {
-      label: 'Make inventory soft',
+      label: 'Make inventory optional',
       apply: (doc) => updateCall(doc, callIndex(doc, 'product_page', 'inventory'), { dependency: 'soft', timeoutMs: 150 }),
-      result:
-        "Availability rises to 99.84%, more than making inventory 99.99% available would give (99.82%). The price is fidelity: more pages render without stock information, so full-fidelity answers within 300 ms drop from 95.6% to 94.6%.",
+      result: 'More requests succeed. The price: more pages load without stock information.',
+      more: 'Complete answers within 300 ms drop from 95.6% to 94.6%. An optional call trades completeness for availability.',
     },
     dot: productPageDot,
     yaml: productPageYaml,
@@ -85,13 +87,12 @@ const SOURCES: Scenario[] = [
   {
     id: 'product_page_promise',
     title: 'The promise came first',
-    lesson:
-      'Same product page, same inputs. Sales promised 99.99% before anyone checked the dependency graph. The model is about 1.4 nines short, and no single improvement closes the gap.',
+    summary: 'Sales promised 99.99%. This system delivers about 99.7%.',
+    more: 'That’s 1.4 nines short. The best single change, making inventory optional, reaches 99.84%. Getting to 99.99% takes several changes at once, or a different promise.',
     tryIt: {
       label: 'Promise what it can keep',
-      apply: (doc) => ({ ...doc, objectives: { ...doc.objectives, availability: 0.997 } }),
-      result:
-        'At 99.7%, the promise matches what this graph delivers today. Getting to 99.99% takes several changes at once; the best single one, making inventory soft, reaches 99.84%.',
+      apply: (doc) => ({ ...doc, objectives: { ...doc.objectives, availability: 0.997, succeedWithin: { ms: 300, target: 0.996 } } }),
+      result: 'A promise of 99.6% within 300 ms is one this system keeps today.',
     },
     dot: productPageDot,
     yaml: productPagePromiseYaml,

@@ -30,14 +30,16 @@ export function Lessons({ lessons, current, tried, edited, completed, onOpen, on
               </button>
               {open && (
                 <div className="lesson-body">
-                  <p>{lesson.lesson}</p>
                   {tried && edited ? (
                     <>
                       <p className="lesson-result">{lesson.tryIt.result}</p>
-                      <button onClick={onReset}>Undo the change</button>
+                      {lesson.tryIt.more && <Why text={lesson.tryIt.more} />}
+                      <button onClick={onReset}>Undo the experiment</button>
                     </>
                   ) : (
                     <>
+                      <p>{lesson.summary}</p>
+                      <Why text={lesson.more} />
                       <button className="primary" onClick={onTry}>
                         Try: {lesson.tryIt.label.charAt(0).toLowerCase() + lesson.tryIt.label.slice(1)}
                       </button>
@@ -58,5 +60,16 @@ export function Lessons({ lessons, current, tried, edited, completed, onOpen, on
         <Icon name="plus" size={14} /> Model your own system
       </button>
     </nav>
+  );
+}
+
+function Why({ text }: { text: string }) {
+  return (
+    <details className="why">
+      <summary>
+        <Icon name="chevron" size={13} /> Why?
+      </summary>
+      <p>{text}</p>
+    </details>
   );
 }

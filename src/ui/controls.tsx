@@ -120,3 +120,45 @@ export function parseMs(text: string, allowEmpty: boolean): number | undefined |
   if (!Number.isInteger(n) || n <= 0) return allowEmpty ? 'Enter whole milliseconds, or leave it empty.' : 'Enter whole milliseconds.';
   return n;
 }
+
+/** A few common values as chips, plus "Other" for anything else. */
+export function Chips({ label, value, options, format, onChange, parse, suffix }: {
+  label: string;
+  value: number;
+  options: number[];
+  format: (v: number) => string;
+  onChange: (v: number) => void;
+  parse: (text: string) => number | string | undefined;
+  suffix: string;
+}) {
+  const custom = !options.includes(value);
+  const [other, setOther] = useState(custom);
+  return (
+    <div className="field">
+      <span className="label">{label}</span>
+      <span className="chips" role="radiogroup" aria-label={label}>
+        {options.map((o) => (
+          <button key={o} role="radio" aria-checked={!other && value === o} onClick={() => { setOther(false); onChange(o); }}>
+            {format(o)}
+          </button>
+        ))}
+        <button role="radio" aria-checked={other} onClick={() => setOther(true)}>
+          Other
+        </button>
+      </span>
+      {other && (
+        <Field
+          label={`Other ${label.toLowerCase()}`}
+          value={format(value).replace(/[^0-9.]/g, '')}
+          suffix={suffix}
+          width={80}
+          onCommit={(t) => {
+            const v = parse(t);
+            if (typeof v !== 'number') return v ?? 'Enter a number.';
+            onChange(v);
+          }}
+        />
+      )}
+    </div>
+  );
+}

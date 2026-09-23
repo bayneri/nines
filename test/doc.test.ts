@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { type Doc, addCall, addService, blankDoc, displayName, docProblems, iconFor, fromParsed, removeNode, renameNode, setNodeType, toDot, toYaml, updateCall } from '../src/doc';
+import { type Doc, addCall, addService, blankDoc, displayName, docProblems, iconFor, makeRedundant, resetToTypical, setKind, updateNode, fromParsed, removeNode, renameNode, setNodeType, toDot, toYaml, updateCall } from '../src/doc';
 import { modelAvailability } from '../src/model/availability';
 import { parseInputs } from '../src/model/inputs';
 import { parseTopology } from '../src/model/topology';
@@ -58,13 +58,12 @@ describe('doc edits', () => {
     expect((addCall(base, 'a', 'c') as Doc).calls).toHaveLength(3);
   });
 
-  it('adds a service called by the selected one, with latency when others have it', () => {
+  it('adds a service called by the selected one, with typical values', () => {
     const { doc, id } = addService(base, 'b');
     expect(id).toBe('service');
     expect(doc.calls.at(-1)).toMatchObject({ from: 'b', to: 'service' });
-    expect(doc.nodes.at(-1)!.latency).toBeUndefined();
-    const timed = parse('digraph g { entry=a; a; }', 'nodes: { a: { availability: 1, transient: 0, latency: { p50_ms: 1, p99_ms: 2 } } }');
-    expect(addService(timed).doc.nodes.at(-1)!.latency).toEqual({ p50Ms: 20, p99Ms: 100 });
+    // New services start with typical values, latency included.
+    expect(doc.nodes.at(-1)).toMatchObject({ availability: 0.999, transient: 0.5, latency: { p50Ms: 20, p99Ms: 100 } });
     expect(addService(addService(base).doc).id).toBe('service_2');
   });
 
@@ -118,5 +117,34 @@ describe('display', () => {
 
   it('starts a blank model that is valid and has latency', () => {
     expect(roundTrip(blankDoc())).toEqual(blankDoc());
+  });
+});
+
+describe('defaults', () => {
+  const base = () => addService(blankDoc(), 'frontend').doc;
+
+  it('lets typical values follow the kind, but keeps edited ones', () => {
+    const asDatabase = setKind(base(), 'service', 'database');
+    expect(asDatabase.nodes.at(-1)).toMatchObject({ icon: 'database', availability: 0.9995, transient: 0.3, latency: { p50Ms: 5, p99Ms: 60 } });
+    const edited = updateNode(base(), 'service', { availability: 0.99 });
+    expect(setKind(edited, 'service', 'database').nodes.at(-1)).toMatchObject({ icon: 'database', availability: 0.99, transient: 0.5 });
+    expect(resetToTypical(setKind(edited, 'service', 'database'), 'service').nodes.at(-1)).toMatchObject({ availability: 0.9995, transient: 0.3 });
+  });
+
+  it('makes a service redundant with a fallback that shares its dependencies', () => {
+    const withDb = addService(base(), 'service').doc; // frontend -> service -> service_2
+    const result = makeRedundant(withDb, 'service');
+    if (typeof result === 'string') throw new Error(result);
+    const { doc, group } = result;
+    expect(doc.calls.map((c) => `${c.from}->${c.to}`)).toEqual([
+      `frontend->${group}`,
+      'service->service_2',
+      `${group}->service`,
+      `${group}->service_fallback`,
+      'service_fallback->service_2',
+    ]);
+    expect(roundTrip(doc)).toEqual(doc);
+    expect(docProblems(doc).filter((p) => p.blocking)).toEqual([]);
+    expect(makeRedundant(doc, group)).toBe('Only a service can be made redundant.');
   });
 });

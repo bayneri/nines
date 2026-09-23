@@ -4,6 +4,7 @@ topology: product_page.dot
 objectives:
   availability: 99.99%
   latency: { p99_ms: 300 }
+  succeed_within: { ms: 300, target: 99.99% }
 defaults:
   transient: 0.5
 nodes:

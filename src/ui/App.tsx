@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis } from '../analysis';
-import { type Doc, addCall, addService, blankDoc, docProblems, setObjectives, toDot, toYaml } from '../doc';
+import { type Doc, addCall, addService, blankDoc, docProblems, makeRedundant, setObjectives, toDot, toYaml } from '../doc';
 import type { Evaluation } from '../model/slo';
 import { SCENARIOS } from '../scenarios';
 import { CodeView } from './CodeView';
 import { Graph, type LossOverlay, type Selection } from './Graph';
 import { Icon } from './icons';
 import { CallInspector, NodeInspector } from './Inspector';
+import { Legend } from './Legend';
 import { Lessons } from './Lessons';
 import { Results } from './Results';
 import type { WorkerRequest, WorkerResponse } from './worker';
@@ -47,6 +48,20 @@ export function App() {
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const [showLosses, setShowLosses] = useState(true);
   const [showCode, setShowCode] = useState(false);
+  const [advanced, setAdvanced] = useState(() => {
+    try {
+      return localStorage.getItem('nines.advanced') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('nines.advanced', advanced ? '1' : '0');
+    } catch {
+      // Storage can be unavailable; the switch then just doesn't persist.
+    }
+  }, [advanced]);
 
   const [analysis, setAnalysis] = useState<Analysis>();
   const [evaluation, setEvaluation] = useState<Evaluation>();
@@ -210,17 +225,25 @@ export function App() {
       onBack={() => setSelection(undefined)}
       onSelectCall={(index) => setSelection({ kind: 'call', index })}
       onRenamed={(id) => setSelection({ kind: 'node', id })}
+      advanced={advanced}
       onAddDependency={() => addDependency(selection.id)}
       onCallAnother={() => setPicking(selection.id)}
+      onMakeRedundant={() => {
+        const result = makeRedundant(doc, selection.id);
+        if (typeof result === 'string') return edit(result);
+        edit(result.doc);
+        setSelection({ kind: 'node', id: result.group });
+      }}
     />
   ) : selection?.kind === 'call' ? (
-    <CallInspector doc={doc} analysis={current?.analysis} evaluation={current?.evaluation} index={selection.index} onEdit={edit} onBack={() => setSelection(undefined)} />
+    <CallInspector advanced={advanced} doc={doc} analysis={current?.analysis} evaluation={current?.evaluation} index={selection.index} onEdit={edit} onBack={() => setSelection(undefined)} />
   ) : ready ? (
     <Results
       doc={doc}
       analysis={current.analysis}
       evaluation={current.evaluation}
       baseline={mode === 'learn' && lessonEdited ? baselines[lessonId] : undefined}
+      advanced={advanced}
       onObjectives={(objectives) => edit(setObjectives(doc, objectives))}
       onHighlight={setHighlight}
       onSelect={setSelection}
@@ -245,6 +268,10 @@ export function App() {
           </button>
         </div>
         <span className="spacer" />
+        <label className="switch" title="Show every setting, for power users">
+          <input type="checkbox" role="switch" aria-label="Advanced" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
+          <span className="switch-label">Advanced</span>
+        </label>
         <button className="icon-button" onClick={undo} disabled={history.index === 0} aria-label="Undo" title="Undo (⌘Z)">
           <Icon name="undo" />
         </button>
@@ -297,10 +324,7 @@ export function App() {
               <Icon name="plus" size={14} /> Service
             </button>
             <span className="spacer" />
-            <label className="toggle">
-              <input type="checkbox" checked={showLosses} onChange={(e) => setShowLosses(e.target.checked)} />
-              <span className="loss-swatch" aria-hidden="true" /> Show where requests are lost
-            </label>
+            <Legend doc={doc} lossesShown={showLosses} onToggleLosses={setShowLosses} />
           </div>
           {banner && (
             <div className={`canvas-banner ${bannerKind}`} role="status">

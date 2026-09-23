@@ -2,8 +2,10 @@
 import { type Doc, type DocNode, displayName } from '../doc';
 
 export function failureMode(transient: number): string {
-  if (transient >= 0.8) return 'Flaky';
-  if (transient <= 0.2) return 'Outages';
+  if (transient <= 0) return 'Outages';
+  if (transient >= 1) return 'Flaky';
+  if (transient < 0.4) return 'Mostly outages';
+  if (transient > 0.6) return 'Mostly flaky';
   return 'Mixed failures';
 }
 
