@@ -1,7 +1,7 @@
 import { seededRandom } from '../../src/model/probability';
 
 /** A random valid topology with groups, soft deps, fan-out and retries, plus high failure rates. */
-export function randomModel(seed: number, options: { latency?: boolean } = {}): { dot: string; yaml: string } {
+export function randomModel(seed: number, options: { latency?: boolean; timeouts?: boolean } = {}): { dot: string; yaml: string } {
   const random = seededRandom(seed);
   const pick = (lo: number, hi: number) => lo + Math.floor(random() * (hi - lo + 1));
   const n = pick(4, 7);
@@ -24,6 +24,7 @@ export function randomModel(seed: number, options: { latency?: boolean } = {}): 
   for (const [i, targets] of edges) {
     for (const j of targets) {
       const attrs = [`retries=${pick(0, groupType.has(i) ? 1 : 2)}`];
+      if (options.timeouts && random() < 0.4) attrs.push(`timeout_ms=${pick(15, 60)}`);
       if (!groupType.has(i)) {
         if (random() < 0.2) attrs.push('dependency=soft');
         if (!groupType.has(j) && random() < 0.25) {

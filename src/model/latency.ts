@@ -21,10 +21,13 @@ export function combineRuns(runs: LatencySimulation[]): LatencySimulation {
     }
     return merged.sort();
   };
+  const sum = (key: 'trials' | 'eventualSuccesses' | 'eventualFullSuccesses') => runs.reduce((n, r) => n + r[key], 0);
   return {
-    trials: runs.reduce((n, r) => n + r.trials, 0),
+    trials: sum('trials'),
     successLatencies: merge('successLatencies'),
     fullSuccessLatencies: merge('fullSuccessLatencies'),
+    eventualSuccesses: sum('eventualSuccesses'),
+    eventualFullSuccesses: sum('eventualFullSuccesses'),
   };
 }
 

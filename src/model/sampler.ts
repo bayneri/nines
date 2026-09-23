@@ -15,6 +15,13 @@
  * - `type=any` fails over in order, so failed members' time adds up.
  *   `type=quorum` calls members in parallel and answers when the
  *   `require`-th success arrives.
+ *
+ * Each request is followed in two coupled worlds: with timeouts enforced, and
+ * ignoring time. Both see the same outages and the same attempts; they only
+ * part ways when a slow attempt that would have succeeded times out. So a
+ * request that succeeds with timeouts also succeeds ignoring time, and the
+ * difference between the two counts estimates what timeouts cost, which is
+ * far less noisy than estimating success with timeouts on its own.
  */
 import { type CompiledEdge, type CompiledModel, type CompiledNode, compile } from './compile';
 import type { Inputs } from './inputs';
@@ -33,17 +40,23 @@ export interface LatencySimulation {
   successLatencies: Float64Array;
   /** Latency of each request that succeeded in full fidelity, sorted ascending. */
   fullSuccessLatencies: Float64Array;
+  /** Requests that succeeded in the coupled world that ignores time. */
+  eventualSuccesses: number;
+  eventualFullSuccesses: number;
 }
 
+/** A call's outcome with timeouts enforced (ok, full, ms) and ignoring time (ok0, full0). */
 interface Outcome {
   ok: boolean;
   full: boolean;
   ms: number;
+  ok0: boolean;
+  full0: boolean;
 }
 
 export function sampleAvailability(topology: Topology, inputs: Inputs, trials: number, seed = 1): SampledAvailability {
   const run = simulate(compile(topology, inputs), trials, seed, false);
-  return { availability: run.successLatencies.length / trials, fullFidelity: run.fullSuccessLatencies.length / trials, trials };
+  return { availability: run.eventualSuccesses / trials, fullFidelity: run.eventualFullSuccesses / trials, trials };
 }
 
 /** Requires latency inputs on every reachable service node. */
@@ -75,79 +88,121 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
     return Math.exp(mu + sigma * z);
   };
 
+  const failed = (ms: number): Outcome => ({ ok: false, full: false, ms, ok0: false, full0: false });
+
   const attempt = (node: CompiledNode, instance: number): Outcome => {
     if (node.type === 'service') {
       let ms = ownLatency(node);
-      if (inOutage(node, instance) || random() < node.transientFail) return { ok: false, full: false, ms };
+      if (inOutage(node, instance) || random() < node.transientFail) return failed(ms);
+      let alive = true;
+      let alive0 = true;
       let full = true;
+      let full0 = true;
       for (const stage of node.stages) {
+        if (!alive && !alive0) break;
+        // The timed world stops after the stage where a hard call failed, so it
+        // only waits for stages it was still running; the untimed world goes on.
+        const timedRunning = alive;
         let stageMs = 0;
-        let hardFailed = false;
         for (const edge of stage) {
-          const result = call(edge);
-          if (result.ms > stageMs) stageMs = result.ms;
-          if (!result.ok && edge.dependency === 'hard') hardFailed = true;
-          full &&= result.full;
+          const r = call(edge);
+          if (r.ms > stageMs) stageMs = r.ms;
+          if (edge.dependency === 'hard') {
+            if (!r.ok) alive = false;
+            if (!r.ok0) alive0 = false;
+          }
+          full &&= r.full;
+          full0 &&= r.full0;
         }
-        ms += stageMs;
-        if (hardFailed) return { ok: false, full: false, ms };
+        if (timedRunning) ms += stageMs;
       }
-      return { ok: true, full, ms };
+      return { ok: alive, full: alive && full, ms, ok0: alive0, full0: alive0 && full0 };
     }
     if (node.type === 'any') {
       let ms = 0;
+      let result: Outcome | undefined;
+      let result0: Outcome | undefined;
       for (const edge of node.edges) {
-        const result = call(edge);
-        ms += result.ms;
-        if (result.ok) return { ok: true, full: result.full, ms };
+        if (result && result0) break;
+        const r = call(edge);
+        if (!result) {
+          ms += r.ms;
+          if (r.ok) result = r;
+        }
+        if (!result0 && r.ok0) result0 = r;
       }
-      return { ok: false, full: false, ms };
+      return { ok: !!result, full: !!result?.full, ms, ok0: !!result0, full0: !!result0?.full0 };
     }
     const results = node.edges.map(call);
+    const count = (pick: (r: Outcome) => boolean) => results.filter(pick).length;
     const successTimes = results.filter((r) => r.ok).map((r) => r.ms).sort((a, b) => a - b);
     const ok = successTimes.length >= node.require;
-    const full = results.filter((r) => r.full).length >= node.require;
     const ms = ok ? successTimes[node.require - 1]! : Math.max(0, ...results.map((r) => r.ms));
-    return { ok, full, ms };
+    return {
+      ok,
+      full: count((r) => r.full) >= node.require,
+      ms,
+      ok0: count((r) => r.ok0) >= node.require,
+      full0: count((r) => r.full0) >= node.require,
+    };
   };
 
   const callInstance = (edge: CompiledEdge, instance: number): Outcome => {
     const target = model.nodes[edge.target]!;
     let ms = 0;
-    for (let i = 0; i <= edge.retries; i++) {
-      const result = attempt(target, instance);
-      if (timing && result.ms > edge.timeoutMs) {
-        ms += edge.timeoutMs;
-        continue;
+    let result: Outcome | undefined;
+    let result0: Outcome | undefined;
+    for (let i = 0; i <= edge.retries && !(result && result0); i++) {
+      const r = attempt(target, instance);
+      if (!result) {
+        if (timing && r.ms > edge.timeoutMs) {
+          ms += edge.timeoutMs;
+        } else {
+          ms += r.ms;
+          if (r.ok) result = r;
+        }
       }
-      ms += result.ms;
-      if (result.ok) return { ok: true, full: result.full, ms };
+      if (!result0 && r.ok0) result0 = r;
     }
-    return { ok: false, full: false, ms };
+    return { ok: !!result, full: !!result?.full, ms, ok0: !!result0, full0: !!result0?.full0 };
   };
 
   const call = (edge: CompiledEdge): Outcome => {
     if (edge.fanout === 1) return callInstance(edge, 0);
     let ok = 0;
-    let allFull = true;
+    let ok0 = 0;
+    let full = true;
+    let full0 = true;
     let ms = 0;
     for (let i = 0; i < edge.fanout; i++) {
-      const result = callInstance(edge, i);
-      if (result.ok) ok++;
-      allFull &&= result.full;
-      if (result.ms > ms) ms = result.ms;
+      const r = callInstance(edge, i);
+      if (r.ok) ok++;
+      if (r.ok0) ok0++;
+      full &&= r.full;
+      full0 &&= r.full0;
+      if (r.ms > ms) ms = r.ms;
     }
-    return { ok: ok >= edge.fanoutRequire, full: allFull, ms };
+    return { ok: ok >= edge.fanoutRequire, full, ms, ok0: ok0 >= edge.fanoutRequire, full0 };
   };
 
   const entry = model.nodes[model.entry]!;
   const latencies: number[] = [];
   const fullLatencies: number[] = [];
+  let eventualSuccesses = 0;
+  let eventualFullSuccesses = 0;
   for (trial = 0; trial < trials; trial++) {
-    const result = attempt(entry, 0);
-    if (!result.ok) continue;
-    latencies.push(result.ms);
-    if (result.full) fullLatencies.push(result.ms);
+    const r = attempt(entry, 0);
+    if (r.ok0) eventualSuccesses++;
+    if (r.full0) eventualFullSuccesses++;
+    if (!r.ok) continue;
+    latencies.push(r.ms);
+    if (r.full) fullLatencies.push(r.ms);
   }
-  return { trials, successLatencies: Float64Array.from(latencies).sort(), fullSuccessLatencies: Float64Array.from(fullLatencies).sort() };
+  return {
+    trials,
+    successLatencies: Float64Array.from(latencies).sort(),
+    fullSuccessLatencies: Float64Array.from(fullLatencies).sort(),
+    eventualSuccesses,
+    eventualFullSuccesses,
+  };
 }

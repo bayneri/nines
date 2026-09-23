@@ -48,3 +48,13 @@ export function ms(value: number): string {
 export function scientific(value: number): string {
   return value.toExponential(1).replace('e-', '×10⁻').replace(/\d+$/, (d) => [...d].map((c) => '⁰¹²³⁴⁵⁶⁷⁸⁹'[+c]).join(''));
 }
+
+/**
+ * Decimals for a sampled estimate: enough to tell its 95% interval's ends
+ * apart, no more, so an estimate never looks more precise than it is.
+ */
+export function decimalsForInterval(low: number, high: number): number {
+  const halfPercent = ((high - low) / 2) * 100;
+  if (!(halfPercent > 0)) return 2;
+  return Math.min(6, Math.max(1, Math.ceil(-Math.log10(halfPercent))));
+}

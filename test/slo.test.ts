@@ -6,6 +6,10 @@ import { parseInputs } from '../src/model/inputs';
 import { simulateLatency } from '../src/model/sampler';
 import { type ObjectiveResult, evaluateObjectives } from '../src/model/slo';
 import { parseTopology } from '../src/model/topology';
+import { toDot, toYaml } from '../src/doc';
+import { wilson } from '../src/model/latency';
+import { SCENARIOS } from '../src/scenarios';
+import { randomModel } from './support/random-model';
 
 function evaluate(dot: string, yaml: string, options: { simulate?: boolean } = { simulate: true }) {
   const topology = parseTopology(dot);
@@ -96,5 +100,50 @@ nodes:
 
     const missed = evaluate(dot, `objectives: { availability: 99.9% }${nodes}`);
     expect(find(missed.objectives, 'availability')).toMatchObject({ verdict: 'missed', reason: 'even ignoring timeouts' });
+  });
+});
+
+describe('soft timeouts', () => {
+  it('keep availability exact, because they only degrade the answer', () => {
+    const e = evaluate('digraph g { entry=a; a -> b [dependency=soft, timeout_ms=5]; }', `
+nodes:
+  a: { availability: 99.9%, transient: 0.5, latency: { p50_ms: 1, p99_ms: 1 } }
+  b: { availability: 99%, transient: 0.5, latency: { p50_ms: 10, p99_ms: 10 } }`);
+    expect(e.hasTimeouts).toBe(false);
+    expect(e.withTimeouts).toEqual(e.ignoringTime);
+    expect(e.ignoringTime.value).toBeCloseTo(0.999, 12);
+  });
+});
+
+describe('coupled timed and untimed simulation', () => {
+  const run = (dot: string, yaml: string, trials: number, seed: number) => {
+    const t = parseTopology(dot).value!;
+    const i = parseInputs(yaml, t).value!;
+    return { t, i, sim: simulateLatency(compile(t, i), trials, seed) };
+  };
+
+  it.each(Array.from({ length: 12 }, (_, k) => k + 1))('ignoring time, matches the exact engine even as timeouts fire (random graph %i)', (seed) => {
+    const { dot, yaml } = randomModel(seed, { latency: true, timeouts: true });
+    const { t, i, sim } = run(dot, yaml, 40_000, seed);
+    const exact = modelAvailability(t, i).availability;
+    const sigma = Math.sqrt((exact * (1 - exact)) / sim.trials);
+    expect(Math.abs(sim.eventualSuccesses / sim.trials - exact), dot).toBeLessThan(4.5 * sigma + 1e-9);
+    // Timeouts can only lose requests.
+    expect(sim.successLatencies.length).toBeLessThanOrEqual(sim.eventualSuccesses);
+  });
+
+  it('narrows the interval when timeouts rarely cost anything', () => {
+    const scenario = SCENARIOS.find((s) => s.id === 'multi_region')!;
+    const e = evaluate(toDot(scenario.doc), toYaml(scenario.doc));
+    const coupled = e.withTimeouts!;
+    const direct = wilson(Math.round(coupled.value * 50_000), 50_000);
+    expect(coupled.high - coupled.low).toBeLessThan((direct.high - direct.low) / 3);
+    expect(coupled.high).toBeLessThanOrEqual(e.ignoringTime.high);
+  });
+
+  it('still reports large losses in full', () => {
+    const e = evaluate(readFileSync('scenarios/search.dot', 'utf8'), readFileSync('scenarios/search.yaml', 'utf8'));
+    expect(e.withTimeouts!.value).toBeGreaterThan(0.82);
+    expect(e.withTimeouts!.value).toBeLessThan(0.85);
   });
 });

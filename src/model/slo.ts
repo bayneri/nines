@@ -5,7 +5,8 @@
  *   1. succeed ignoring time: failures alone, exact from enumeration. Timeouts
  *      can only turn successes into failures, so this is an upper bound.
  *   2. succeed with timeouts enforced: the real availability. Equal to step 1
- *      when no timeout is configured; otherwise simulated.
+ *      when no hard call has a timeout; otherwise step 1 minus the simulated
+ *      loss to timeouts.
  *   3. succeed within L ms: simulated.
  *
  * The availability objective is judged at step 2, the combined
@@ -47,7 +48,7 @@ export interface Evaluation {
   /** Step 1: succeed ignoring time. */
   ignoringTime: Measure;
   fullIgnoringTime: Measure;
-  /** Some reachable call has a timeout, so step 2 needs the simulation. */
+  /** Some reachable hard call has a timeout, so step 2 needs the simulation. */
   hasTimeouts: boolean;
   /** Step 2: succeed with timeouts enforced. Undefined until it can be known. */
   withTimeouts?: Measure;
@@ -68,21 +69,26 @@ export function evaluateObjectives(
 ): Evaluation {
   const model = compile(topology, inputs);
   const missing = model.nodes.filter((n) => n.type === 'service' && !n.latency).map((n) => n.id);
-  const hasTimeouts = model.nodes.some((n) => n.edges.some((e) => Number.isFinite(e.timeoutMs)));
+  // A soft call that times out only degrades the answer, so only hard calls
+  // (group members included) can turn a timeout into a failure.
+  const hasTimeouts = model.nodes.some((n) => n.edges.some((e) => e.dependency === 'hard' && Number.isFinite(e.timeoutMs)));
 
   const ignoringTime = enumerated(availability.availability, availability);
   const fullIgnoringTime = enumerated(availability.fullFidelity, availability);
   const run = missing.length === 0 ? simulation?.run : undefined;
 
-  // Timeouts can only lose requests, so a sampled figure is capped by step 1.
-  const capped = (successes: number, trials: number, cap: Measure): Measure => {
-    const e = wilson(successes, trials);
-    return { value: Math.min(e.value, cap.high), low: Math.min(e.low, cap.high), high: Math.min(e.high, cap.high), kind: 'sampled' };
+  // The simulation follows every request with and without timeouts, coupled,
+  // so it measures what time costs: requests that succeed ignoring time but
+  // not with it. Subtracting that loss from the exact figure is much less
+  // noisy than sampling success directly, and can't exceed the exact ceiling.
+  const lessLoss = (base: Measure, losses: number, trials: number): Measure => {
+    const loss = wilson(Math.max(0, losses), trials);
+    return { value: base.value - loss.value, low: Math.max(0, base.low - loss.high), high: base.high - loss.low, kind: 'sampled' };
   };
 
   let withTimeouts: Measure | undefined;
   if (!hasTimeouts) withTimeouts = ignoringTime;
-  else if (run) withTimeouts = capped(run.successLatencies.length, run.trials, ignoringTime);
+  else if (run) withTimeouts = lessLoss(ignoringTime, run.eventualSuccesses - run.successLatencies.length, run.trials);
 
   const latency: LatencyState =
     missing.length > 0
@@ -138,8 +144,11 @@ export function evaluateObjectives(
     if (!run) {
       objectives.push({ kind: 'succeed_within', ms, target, verdict: 'unclear', reason: unavailable });
     } else {
-      const measure = capped(countAtMost(run.successLatencies, ms), run.trials, withTimeouts ?? ignoringTime);
-      const fullFidelity = capped(countAtMost(run.fullSuccessLatencies, ms), run.trials, fullIgnoringTime);
+      const measure = lessLoss(ignoringTime, run.eventualSuccesses - countAtMost(run.successLatencies, ms), run.trials);
+      // Full fidelity isn't monotone across the coupled worlds (failover can pick
+      // a degraded member in one and a complete one in the other), so it is
+      // sampled directly.
+      const fullFidelity: Measure = { ...wilson(countAtMost(run.fullSuccessLatencies, ms), run.trials), kind: 'sampled' };
       objectives.push({ kind: 'succeed_within', ms, target, measure, fullFidelity, verdict: verdict(measure, target) });
     }
   }

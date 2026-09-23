@@ -10,14 +10,15 @@ interface Props {
   yaml: string;
   onChange: (tab: FileTab, value: string) => void;
   diagnostics: Diagnostic[];
+  readOnly?: boolean;
 }
 
 const FILES: { tab: FileTab; name: string; source: Diagnostic['source']; hint: string }[] = [
   { tab: 'dot', name: 'topology.dot', source: 'topology', hint: 'What you build: services, dependencies, redundancy, fan-out, retries, timeouts.' },
-  { tab: 'yaml', name: 'inputs.yaml', source: 'inputs', hint: 'What you measure or assume: availability, failure mix, latency, objective.' },
+  { tab: 'yaml', name: 'inputs.yaml', source: 'inputs', hint: 'What you measure or assume: availability, failure mix, latency, objectives.' },
 ];
 
-export function Editor({ tab, onTab, dot, yaml, onChange, diagnostics }: Props) {
+export function Editor({ tab, onTab, dot, yaml, onChange, diagnostics, readOnly }: Props) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLPreElement>(null);
   const value = tab === 'dot' ? dot : yaml;
@@ -38,7 +39,7 @@ export function Editor({ tab, onTab, dot, yaml, onChange, diagnostics }: Props) 
   };
 
   return (
-    <section className="editor" aria-label="Model source">
+    <section className={`editor${readOnly ? ' read-only' : ''}`} aria-label="Model source">
       <div className="tabs" role="tablist">
         {FILES.map((f) => {
           const errors = diagnostics.filter((d) => d.source === f.source && d.severity === 'error').length;
@@ -64,6 +65,7 @@ export function Editor({ tab, onTab, dot, yaml, onChange, diagnostics }: Props) 
           ref={textarea}
           value={value}
           spellCheck={false}
+          readOnly={readOnly}
           autoCapitalize="off"
           autoCorrect="off"
           aria-label={file.name}
