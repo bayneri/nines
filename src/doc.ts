@@ -4,7 +4,7 @@
  * back into it when someone edits the code directly.
  */
 import type { Inputs, LatencyInput, LatencyObjective, Objectives } from './model/inputs';
-import type { DependencyKind, NodeType, Topology } from './model/topology';
+import type { DependencyKind, NodeIcon, NodeType, Topology } from './model/topology';
 
 export interface DocNode {
   id: string;
@@ -12,6 +12,8 @@ export interface DocNode {
   /** Quorum only. */
   require?: number;
   infra: boolean;
+  /** Display only. */
+  icon?: NodeIcon;
   label?: string;
   /** Services only (groups have no failures of their own). */
   availability: number;
@@ -48,6 +50,7 @@ export function fromParsed(topology: Topology, inputs: Inputs): Doc {
       const node: DocNode = { id: n.id, type: n.type, infra: n.kind === 'infra', availability: own?.availability ?? 1, transient: own?.transient ?? 0.5 };
       if (n.type === 'quorum') node.require = n.require;
       if (n.label !== undefined) node.label = n.label;
+      if (n.icon !== undefined) node.icon = n.icon;
       if (own?.latency) node.latency = { ...own.latency };
       return node;
     }),
@@ -83,6 +86,7 @@ export function toDot(doc: Doc): string {
     if (n.type !== 'service') attrs.push(`type=${n.type}`);
     if (n.type === 'quorum' && n.require !== undefined) attrs.push(`require=${n.require}`);
     if (n.infra) attrs.push('kind=infra');
+    if (n.icon !== undefined) attrs.push(`icon=${n.icon}`);
     if (n.label !== undefined) attrs.push(`label=${JSON.stringify(n.label)}`);
     if (attrs.length > 0) declarations.push(`    ${dotId(n.id)} [${attrs.join(', ')}];`);
     else if (!inCalls.has(n.id)) declarations.push(`    ${dotId(n.id)};`);
@@ -286,4 +290,30 @@ export function docProblems(doc: Doc): { message: string; node?: string; blockin
     problems.push({ blocking: false, message: `${list} ${unreachable.length === 1 ? "isn't" : "aren't"} called from where requests arrive, so ${unreachable.length === 1 ? "it doesn't" : "they don't"} count yet.` });
   }
   return problems;
+}
+
+/** The name people see: the label, or the id made readable. */
+export function displayName(node: DocNode): string {
+  if (node.label) return node.label;
+  const words = node.id.replace(/[_-]+/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** The icon a node is drawn with: its own, or one implied by its role. */
+export function iconFor(doc: Doc, node: DocNode): NodeIcon {
+  if (node.icon) return node.icon;
+  if (node.infra) return 'infra';
+  if (node.id === doc.entry) return 'web';
+  return 'service';
+}
+
+/** A one-service starting point for a blank model. */
+export function blankDoc(): Doc {
+  return {
+    name: 'my_system',
+    entry: 'frontend',
+    nodes: [{ id: 'frontend', type: 'service', infra: false, icon: 'web', availability: 0.999, transient: 0.5, latency: { p50Ms: 20, p99Ms: 100 } }],
+    calls: [],
+    objectives: { availability: 0.999, latency: [{ percentile: 0.99, ms: 300 }] },
+  };
 }

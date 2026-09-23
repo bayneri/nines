@@ -16,6 +16,8 @@ import { type Diagnostic, type ParseResult, hasErrors, suggest } from './diagnos
 
 export type NodeType = 'service' | 'any' | 'quorum';
 export type DependencyKind = 'hard' | 'soft';
+export const NODE_ICONS = ['web', 'service', 'database', 'queue', 'infra'] as const;
+export type NodeIcon = (typeof NODE_ICONS)[number];
 
 export interface TopologyNode {
   id: string;
@@ -23,6 +25,8 @@ export interface TopologyNode {
   /** Members that must succeed; only for group nodes (any => 1). */
   require?: number;
   kind?: 'infra';
+  /** Display only: how the node is drawn. */
+  icon?: NodeIcon;
   label?: string;
   line?: number;
 }
@@ -56,7 +60,7 @@ export function isGroup(node: TopologyNode): boolean {
 }
 
 const GRAPH_ATTRS = ['entry', 'label'] as const;
-const NODE_ATTRS = ['type', 'require', 'kind', 'label'] as const;
+const NODE_ATTRS = ['type', 'require', 'kind', 'icon', 'label'] as const;
 const EDGE_ATTRS = ['dependency', 'fanout', 'fanout_require', 'retries', 'stage', 'timeout_ms', 'label'] as const;
 /** Edge attributes that only make sense on a service's dependency, not a group's member. */
 const DEPENDENCY_ONLY_EDGE_ATTRS = ['dependency', 'fanout', 'fanout_require', 'stage'] as const;
@@ -216,6 +220,8 @@ export function parseTopology(source: string): ParseResult<Topology> {
       }
       node.require = require;
     }
+    const icon = enumAttr(attrs, 'icon', owner, NODE_ICONS);
+    if (icon) node.icon = icon;
     const kind = enumAttr(attrs, 'kind', owner, ['infra'] as const);
     if (kind) node.kind = kind;
     const label = attrs.get('label')?.value;

@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { type Doc, addCall, addService, docProblems, fromParsed, removeNode, renameNode, setNodeType, toDot, toYaml, updateCall } from '../src/doc';
+import { type Doc, addCall, addService, blankDoc, displayName, docProblems, iconFor, fromParsed, removeNode, renameNode, setNodeType, toDot, toYaml, updateCall } from '../src/doc';
 import { modelAvailability } from '../src/model/availability';
 import { parseInputs } from '../src/model/inputs';
 import { parseTopology } from '../src/model/topology';
@@ -104,5 +104,19 @@ describe('docProblems', () => {
       { node: 'b', blocking: true, message: 'b is an either-of group but calls nothing. Give it services to choose between, or make it a service again.' },
       { blocking: false, message: "c isn't called from where requests arrive, so it doesn't count yet." },
     ]);
+  });
+});
+
+describe('display', () => {
+  it('names and draws nodes from labels, icons and roles', () => {
+    const doc = parse('digraph g { entry=web_app; web_app -> ledger_db; ledger_db [icon=database, label="Ledger"]; web_app -> dns; dns [kind=infra]; }', 'defaults: { availability: 99.9%, transient: 0.5 }');
+    const [web, ledger, dns] = doc.nodes;
+    expect([displayName(web!), displayName(ledger!), displayName(dns!)]).toEqual(['Web app', 'Ledger', 'Dns']);
+    expect([iconFor(doc, web!), iconFor(doc, ledger!), iconFor(doc, dns!)]).toEqual(['web', 'database', 'infra']);
+    expect(roundTrip(doc)).toEqual(doc);
+  });
+
+  it('starts a blank model that is valid and has latency', () => {
+    expect(roundTrip(blankDoc())).toEqual(blankDoc());
   });
 });

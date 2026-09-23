@@ -7,4 +7,9 @@ digraph search {
     search_api -> query_parser [stage=0, timeout_ms=50];
     search_api -> shard        [stage=1, fanout=100, timeout_ms=300];
     search_api -> ranker       [stage=2, timeout_ms=100];
+
+    search_api [icon=web, label="Search API"];
+    query_parser [label="Query parser"];
+    shard [icon=database, label="Shard"];
+    ranker [label="Ranker"];
 }

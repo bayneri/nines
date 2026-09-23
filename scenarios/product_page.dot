@@ -13,5 +13,8 @@ digraph product_page {
     pricing -> auth;
     inventory -> auth;
 
-    auth [kind=infra];
+    product_page [icon=web, label="Product page"];
+    inventory [icon=database, label="Inventory"];
+    recommendations [label="Recommendations"];
+    auth [kind=infra, label="Auth"];
 }

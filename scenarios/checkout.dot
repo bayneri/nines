@@ -5,4 +5,8 @@ digraph checkout {
 
     checkout -> payments [retries=3, timeout_ms=800];
     payments -> ledger_db [timeout_ms=200];
+
+    checkout [icon=web, label="Checkout"];
+    payments [label="Payments"];
+    ledger_db [icon=database, label="Ledger"];
 }

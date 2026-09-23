@@ -6,12 +6,15 @@ digraph multi_region {
 
     frontend -> app;
 
-    app [type=any, label="app (either region)"];
+    app [type=any, label="Either region succeeds"];
     app -> app_us_east [timeout_ms=300];
     app -> app_eu_west;
 
     app_us_east -> control_plane;
     app_eu_west -> control_plane;
 
-    control_plane [kind=infra];
+    frontend [icon=web, label="Frontend"];
+    app_us_east [label="US East"];
+    app_eu_west [label="EU West"];
+    control_plane [kind=infra, label="Shared control plane"];
 }

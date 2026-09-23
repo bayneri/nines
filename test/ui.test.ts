@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/analysis';
 import { decimalsFor, decimalsForInterval, inputPercent, percent } from '../src/ui/format';
-import { renderDot } from '../src/ui/graph';
-import { fromParsed } from '../src/doc';
 import { parseInputs } from '../src/model/inputs';
 import { parseTopology } from '../src/model/topology';
 
@@ -45,22 +43,9 @@ describe('analyze', () => {
   });
 });
 
-describe('renderDot', () => {
-  it('labels call semantics, ids every element, and marks groups, infra and the entry', () => {
-    const topology = parseTopology(`digraph g {
-      entry=a;
-      a -> g [stage=0];
-      a -> s [stage=1, fanout=10, fanout_require=8, retries=2, timeout_ms=300, dependency=soft];
-      g [type=quorum, require=2]; g -> x; g -> y; g -> z;
-      x [kind=infra];
-    }`).value!;
-    const doc = fromParsed(topology, parseInputs('defaults: { availability: 0.9995, transient: 0.9 }', topology).value!);
-    const dot = renderDot(doc);
-    expect(dot).toContain('label=" step 2 · soft · 8 of ×10 · ↻2 · 300 ms ", id="e1"');
-    expect(dot).toContain('label="g\\n2 of 3", id="n1"');
-    expect(dot).toContain('label="s\\n99.95% · flaky", id="n2"');
-    expect(dot).toMatch(/"x" \[.*class="service infra"/);
-    expect(dot).toMatch(/"a" \[.*class="service entry"/);
-    expect(dot).toContain('"__requests" -> "a"');
+describe('share', () => {
+  it('shows two significant figures without float noise', async () => {
+    const { share } = await import('../src/ui/words');
+    expect([share(0.154), share(0.01), share(0.0005), share(0.000099999), share(0)]).toEqual(['15.4%', '1.0%', '0.050%', '0.010%', '0%']);
   });
 });

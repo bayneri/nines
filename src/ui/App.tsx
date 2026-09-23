@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis } from '../analysis';
-import { type Doc, addCall, addService, docProblems, setObjectives, toDot, toYaml } from '../doc';
+import { type Doc, addCall, addService, blankDoc, docProblems, setObjectives, toDot, toYaml } from '../doc';
 import type { Evaluation } from '../model/slo';
 import { SCENARIOS } from '../scenarios';
-import { Canvas, type Selection } from './Canvas';
 import { CodeView } from './CodeView';
+import { Graph, type LossOverlay, type Selection } from './Graph';
+import { Icon } from './icons';
 import { CallInspector, NodeInspector } from './Inspector';
-import { Panel } from './Panel';
+import { Lessons } from './Lessons';
+import { Results } from './Results';
 import type { WorkerRequest, WorkerResponse } from './worker';
+import { nodeName, share } from './words';
+
+type Mode = 'learn' | 'model';
 
 const DEBOUNCE_MS = 150;
 /** Edits with the same coalesce key this close together are one undo step. */
 const COALESCE_MS = 800;
+/** Losses below this share of requests aren't drawn on the graph. */
+const DRAW_THRESHOLD = 0.0001;
+/** Simulated losses backed by fewer lost requests than this are noise. */
+const MIN_LOST_REQUESTS = 5;
 
 interface History {
   docs: Doc[];
@@ -19,18 +28,25 @@ interface History {
   lastKey?: string;
   lastAt?: number;
 }
+const start = (doc: Doc): History => ({ docs: [doc], index: 0 });
 
 export function App() {
-  const [scenarioId, setScenarioId] = useState(SCENARIOS[0]!.id);
-  const scenario = SCENARIOS.find((s) => s.id === scenarioId)!;
-  const [history, setHistory] = useState<History>({ docs: [scenario.doc], index: 0 });
+  const [mode, setMode] = useState<Mode>('learn');
+  const [lessonId, setLessonId] = useState(SCENARIOS[0]!.id);
+  const lesson = SCENARIOS.find((s) => s.id === lessonId)!;
+  const [histories, setHistories] = useState<Record<Mode, History>>({ learn: start(lesson.doc), model: start(blankDoc()) });
+  const history = histories[mode];
   const doc = history.docs[history.index]!;
+  const setHistory = useCallback((update: (h: History) => History) => setHistories((all) => ({ ...all, [mode]: update(all[mode]) })), [mode]);
 
   const [selection, setSelection] = useState<Selection>();
+  const [highlight, setHighlight] = useState<Selection>();
   const [picking, setPicking] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [tried, setTried] = useState(false);
-  const [view, setView] = useState<'results' | 'code'>('results');
+  const [completed, setCompleted] = useState<Set<string>>(new Set());
+  const [showLosses, setShowLosses] = useState(true);
+  const [showCode, setShowCode] = useState(false);
 
   const [analysis, setAnalysis] = useState<Analysis>();
   const [evaluation, setEvaluation] = useState<Evaluation>();
@@ -38,32 +54,49 @@ export function App() {
 
   // ---- Editing -------------------------------------------------------------
 
-  const edit = useCallback((result: Doc | string, coalesce?: string) => {
-    if (typeof result === 'string') return setMessage(result);
-    setMessage(undefined);
-    setHistory((h) => {
-      const now = Date.now();
-      const merge = coalesce !== undefined && h.lastKey === coalesce && now - (h.lastAt ?? 0) < COALESCE_MS;
-      const base = merge ? h.index - 1 : h.index;
-      const docs = [...h.docs.slice(0, base + 1), result];
-      return { docs, index: docs.length - 1, lastKey: coalesce, lastAt: now };
-    });
-  }, []);
+  const edit = useCallback(
+    (result: Doc | string, coalesce?: string) => {
+      if (typeof result === 'string') return setMessage(result);
+      setMessage(undefined);
+      setHistory((h) => {
+        const now = Date.now();
+        const merge = coalesce !== undefined && h.lastKey === coalesce && now - (h.lastAt ?? 0) < COALESCE_MS;
+        const base = merge ? h.index - 1 : h.index;
+        const docs = [...h.docs.slice(0, base + 1), result];
+        return { docs, index: docs.length - 1, lastKey: coalesce, lastAt: now };
+      });
+    },
+    [setHistory],
+  );
+  const undo = useCallback(() => setHistory((h) => ({ ...h, index: Math.max(0, h.index - 1), lastKey: undefined })), [setHistory]);
+  const redo = useCallback(() => setHistory((h) => ({ ...h, index: Math.min(h.docs.length - 1, h.index + 1), lastKey: undefined })), [setHistory]);
 
-  const undo = () => setHistory((h) => ({ ...h, index: Math.max(0, h.index - 1), lastKey: undefined }));
-  const redo = () => setHistory((h) => ({ ...h, index: Math.min(h.docs.length - 1, h.index + 1), lastKey: undefined }));
-
-  const loadScenario = (id: string) => {
-    const next = SCENARIOS.find((s) => s.id === id)!;
-    setScenarioId(id);
-    setHistory({ docs: [next.doc], index: 0 });
+  const clearTransient = () => {
+    // Results belong to the doc they were computed for; a new doc starts fresh.
+    setAnalysis(undefined);
+    setEvaluation(undefined);
     setSelection(undefined);
+    setHighlight(undefined);
     setPicking(undefined);
     setMessage(undefined);
+  };
+  const openLesson = (id: string) => {
+    const next = SCENARIOS.find((s) => s.id === id)!;
+    setLessonId(id);
+    setHistories((all) => ({ ...all, learn: start(next.doc) }));
     setTried(false);
+    clearTransient();
+  };
+  const loadModel = (next: Doc) => {
+    setHistories((all) => ({ ...all, model: start(next) }));
+    setMode('model');
+    clearTransient();
+  };
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    clearTransient();
   };
 
-  // Keep the selection pointing at something that exists.
   useEffect(() => {
     if (selection?.kind === 'node' && !doc.nodes.some((n) => n.id === selection.id)) setSelection(undefined);
     if (selection?.kind === 'call' && !doc.calls[selection.index]) setSelection(undefined);
@@ -83,7 +116,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [undo, redo]);
 
   const addDependency = (caller?: string) => {
     const { doc: next, id } = addService(doc, caller);
@@ -95,8 +128,9 @@ export function App() {
 
   const dot = useMemo(() => toDot(doc), [doc]);
   const yaml = useMemo(() => toYaml(doc), [doc]);
-  const scenarioSource = useMemo(() => ({ dot: toDot(scenario.doc), yaml: toYaml(scenario.doc) }), [scenario]);
-  const edited = dot !== scenarioSource.dot || yaml !== scenarioSource.yaml;
+  const lessonSource = useMemo(() => ({ dot: toDot(lesson.doc), yaml: toYaml(lesson.doc) }), [lesson]);
+  const lessonEdited = dot !== lessonSource.dot || yaml !== lessonSource.yaml;
+  const baselineKey = mode === 'learn' && !lessonEdited ? lessonId : undefined;
 
   const worker = useRef<Worker>(undefined);
   const requests = useRef<{ id: number; baselineOf?: string }>({ id: 0 });
@@ -118,161 +152,194 @@ export function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      requests.current = { id: requests.current.id + 1, baselineOf: edited ? undefined : scenarioId };
+      requests.current = { id: requests.current.id + 1, baselineOf: baselineKey };
       const request: WorkerRequest = { id: requests.current.id, dot, yaml };
       worker.current?.postMessage(request);
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [dot, yaml, edited, scenarioId]);
+  }, [dot, yaml, baselineKey]);
 
-  // Structural problems in the editor's terms; parser errors only as a fallback.
   const structural = useMemo(() => docProblems(doc), [doc]);
   const blocking = structural.filter((p) => p.blocking).map((p) => p.message);
   const parserErrors = analysis?.diagnostics.filter((d) => d.severity === 'error').map((d) => d.message) ?? [];
   const problems = blocking.length > 0 ? blocking : parserErrors;
   const notices = structural.filter((p) => !p.blocking).map((p) => p.message);
+  // Between an edit and the worker's reply, results describe the previous doc;
+  // keep only the losses that still point at the same services and calls.
+  const current = useMemo(() => {
+    if (!analysis || !evaluation) return undefined;
+    const ids = new Set(doc.nodes.map((n) => n.id));
+    return {
+      analysis: { ...analysis, levers: analysis.levers?.filter((l) => ids.has(l.id)) },
+      evaluation: { ...evaluation, timeoutLosses: evaluation.timeoutLosses.filter((l) => doc.calls[l.edge]?.from === l.from && doc.calls[l.edge]?.to === l.to) },
+    };
+  }, [analysis, evaluation, doc]);
+  const ready = current && problems.length === 0;
+
+  // What to draw as lost: timeout losses on calls, failure levers on services.
+  const losses = useMemo((): LossOverlay | undefined => {
+    if (!showLosses || !ready) return undefined;
+    const { analysis: a, evaluation: e } = current;
+    const trials = e.latency.status === 'sampled' ? e.latency.trials : 0;
+    const timeouts = e.timeoutLosses.filter((l) => l.share.value * trials >= MIN_LOST_REQUESTS);
+    const max = Math.max(1e-12, ...timeouts.map((l) => l.share.value), ...(a.levers ?? []).map((l) => l.ifPerfect));
+    const nodes = new Map((a.levers ?? []).filter((l) => l.ifPerfect >= DRAW_THRESHOLD).map((l) => [l.id, l.ifPerfect / max]));
+    const calls = new Map(
+      timeouts.filter((l) => l.share.value >= DRAW_THRESHOLD).map((l) => [l.edge, `timeouts lose ${share(l.share.value)}`]),
+    );
+    return { nodes, calls };
+  }, [showLosses, ready, current]);
 
   // ---- Layout --------------------------------------------------------------
 
-  const selectedNode = selection?.kind === 'node' ? doc.nodes.find((n) => n.id === selection.id) : undefined;
-  const inspector =
-    selection?.kind === 'node' ? (
-      <NodeInspector
-        doc={doc}
-        id={selection.id}
-        onEdit={edit}
-        onRenamed={(id) => setSelection({ kind: 'node', id })}
-        onClose={() => setSelection(undefined)}
-        onAddDependency={() => addDependency(selection.id)}
-        onCallAnother={() => setPicking(selection.id)}
-      />
-    ) : selection?.kind === 'call' ? (
-      <CallInspector doc={doc} index={selection.index} onEdit={edit} onClose={() => setSelection(undefined)} />
-    ) : undefined;
-
-  const toolbar = (
-    <>
-      <button onClick={() => addDependency(selectedNode?.id)}>+ Service</button>
-      <span className="toolbar-hint">
-        {picking
-          ? `Click the service ${picking} should call. Esc to cancel.`
-          : selection
-            ? ''
-            : 'Click a service or a call to edit it.'}
-      </span>
-      <span className="spacer" />
-      <button onClick={undo} disabled={history.index === 0} aria-label="Undo">
-        Undo
-      </button>
-      <button onClick={redo} disabled={history.index === history.docs.length - 1} aria-label="Redo">
-        Redo
-      </button>
-    </>
+  const pane = showCode ? (
+    <CodeView
+      doc={doc}
+      onApply={(next) => {
+        edit(next);
+        setSelection(undefined);
+      }}
+    />
+  ) : selection?.kind === 'node' ? (
+    <NodeInspector
+      doc={doc}
+      analysis={current?.analysis}
+      evaluation={current?.evaluation}
+      id={selection.id}
+      onEdit={edit}
+      onBack={() => setSelection(undefined)}
+      onSelectCall={(index) => setSelection({ kind: 'call', index })}
+      onRenamed={(id) => setSelection({ kind: 'node', id })}
+      onAddDependency={() => addDependency(selection.id)}
+      onCallAnother={() => setPicking(selection.id)}
+    />
+  ) : selection?.kind === 'call' ? (
+    <CallInspector doc={doc} analysis={current?.analysis} evaluation={current?.evaluation} index={selection.index} onEdit={edit} onBack={() => setSelection(undefined)} />
+  ) : ready ? (
+    <Results
+      doc={doc}
+      analysis={current.analysis}
+      evaluation={current.evaluation}
+      baseline={mode === 'learn' && lessonEdited ? baselines[lessonId] : undefined}
+      onObjectives={(objectives) => edit(setObjectives(doc, objectives))}
+      onHighlight={setHighlight}
+      onSelect={setSelection}
+    />
+  ) : (
+    <p className="pane-empty">{analysis ? 'Fix the problem shown on the graph to see results.' : 'Working it out…'}</p>
   );
 
-  const banner = (message || problems.length > 0 || notices.length > 0) && (
-    <div className={`canvas-banner${message || problems.length > 0 ? '' : ' info'}`} role="status">
-      <span>{message ?? (problems.length > 0 ? problems.join(' ') : notices.join(' '))}</span>
-      {message && (
-        <button className="link" onClick={() => setMessage(undefined)}>
-          Dismiss
-        </button>
-      )}
-    </div>
-  );
+  const banner = message ?? (problems.length > 0 ? problems.join(' ') : picking ? `Click the service ${nodeName(doc, picking)} should call. Esc to cancel.` : notices.join(' '));
+  const bannerKind = message || problems.length > 0 ? 'problem' : picking ? 'prompt' : 'info';
 
   return (
-    <div className="app">
+    <div className={`app mode-${mode}`}>
       <header className="topbar">
         <span className="brand">nines</span>
-        <label className="scenario-picker">
-          <span className="sr-only">Scenario</span>
-          <select value={scenarioId} onChange={(e) => loadScenario(e.target.value)}>
-            {SCENARIOS.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="spacer" />
-        <div className="view-switch" role="tablist" aria-label="Side panel">
-          <button role="tab" aria-selected={view === 'results'} onClick={() => setView('results')}>
-            Results
+        <div className="mode-switch" role="tablist" aria-label="Mode">
+          <button role="tab" aria-selected={mode === 'learn'} onClick={() => switchMode('learn')}>
+            <Icon name="book" size={15} /> Learn
           </button>
-          <button role="tab" aria-selected={view === 'code'} onClick={() => setView('code')}>
-            Code
+          <button role="tab" aria-selected={mode === 'model'} onClick={() => switchMode('model')}>
+            <Icon name="grid" size={15} /> Model
           </button>
         </div>
+        <span className="spacer" />
+        <button className="icon-button" onClick={undo} disabled={history.index === 0} aria-label="Undo" title="Undo (⌘Z)">
+          <Icon name="undo" />
+        </button>
+        <button className="icon-button" onClick={redo} disabled={history.index === history.docs.length - 1} aria-label="Redo" title="Redo (⇧⌘Z)">
+          <Icon name="redo" />
+        </button>
+        <button className={`icon-button${showCode ? ' on' : ''}`} onClick={() => setShowCode((v) => !v)} aria-pressed={showCode} aria-label="Show the model as code" title="Code">
+          <Icon name="code" />
+        </button>
       </header>
 
-      <section className="story" aria-label="Scenario">
-        <p>{tried && edited ? scenario.tryIt.result : scenario.lesson}</p>
-        <div className="story-actions">
-          {!(tried && edited) && (
-            <button
-              className="primary"
-              onClick={() => {
-                edit(scenario.tryIt.apply(doc));
-                setTried(true);
-              }}
-            >
-              Try: {scenario.tryIt.label.charAt(0).toLowerCase() + scenario.tryIt.label.slice(1)}
+      <div className="workspace">
+        {mode === 'learn' && (
+          <Lessons
+            lessons={SCENARIOS}
+            current={lessonId}
+            tried={tried}
+            edited={lessonEdited}
+            completed={completed}
+            onOpen={openLesson}
+            onTry={() => {
+              edit(lesson.tryIt.apply(doc));
+              setTried(true);
+              setCompleted((c) => new Set(c).add(lessonId));
+            }}
+            onReset={() => openLesson(lessonId)}
+            onBlank={() => loadModel(blankDoc())}
+          />
+        )}
+
+        <main className="canvas" aria-label="System">
+          <div className="canvas-tools">
+            {mode === 'model' && (
+              <label className="template">
+                <span className="sr-only">Start from</span>
+                <select value="" onChange={(e) => loadModel(e.target.value === 'blank' ? blankDoc() : SCENARIOS.find((s) => s.id === e.target.value)!.doc)}>
+                  <option value="" disabled>
+                    Start from…
+                  </option>
+                  <option value="blank">A blank system</option>
+                  {SCENARIOS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button onClick={() => addDependency(selection?.kind === 'node' ? selection.id : undefined)}>
+              <Icon name="plus" size={14} /> Service
             </button>
+            <span className="spacer" />
+            <label className="toggle">
+              <input type="checkbox" checked={showLosses} onChange={(e) => setShowLosses(e.target.checked)} />
+              <span className="loss-swatch" aria-hidden="true" /> Show where requests are lost
+            </label>
+          </div>
+          {banner && (
+            <div className={`canvas-banner ${bannerKind}`} role="status">
+              <span>{banner}</span>
+              {message && (
+                <button className="text-button" onClick={() => setMessage(undefined)}>
+                  Dismiss
+                </button>
+              )}
+            </div>
           )}
-          {edited && <button onClick={() => loadScenario(scenarioId)}>Reset</button>}
-        </div>
-      </section>
-
-      <main className="workspace">
-        <Canvas
-          doc={doc}
-          selection={selection}
-          onSelect={(s) => {
-            setSelection(s);
-            setMessage(undefined);
-          }}
-          onPick={
-            picking
-              ? (target) => {
-                  const result = addCall(doc, picking, target);
-                  edit(result);
-                  setPicking(undefined);
-                  if (typeof result !== 'string') setSelection({ kind: 'call', index: result.calls.length - 1 });
-                }
-              : undefined
-          }
-          toolbar={toolbar}
-          banner={banner}
-          inspector={picking ? undefined : inspector}
-        />
-        <aside className="side" aria-label={view === 'results' ? 'Results' : 'Code'}>
-          {view === 'code' ? (
-            <CodeView
+          <div className="canvas-scroll">
+            <Graph
               doc={doc}
-              onApply={(next) => {
-                edit(next);
-                setSelection(undefined);
+              selection={selection}
+              highlight={highlight}
+              losses={losses}
+              onSelect={(s) => {
+                setSelection(s);
+                setMessage(undefined);
               }}
+              onPick={
+                picking
+                  ? (target) => {
+                      const result = addCall(doc, picking, target);
+                      edit(result);
+                      setPicking(undefined);
+                      if (typeof result !== 'string') setSelection({ kind: 'call', index: result.calls.length - 1 });
+                    }
+                  : undefined
+              }
             />
-          ) : analysis && evaluation ? (
-            <Panel
-              analysis={analysis}
-              evaluation={evaluation}
-              baseline={edited ? baselines[scenarioId] : undefined}
-              objectives={doc.objectives}
-              onObjectives={(objectives) => edit(setObjectives(doc, objectives))}
-            />
-          ) : (
-            <p className="empty">{analysis ? 'Fix the problem shown on the graph to see results.' : 'Analyzing…'}</p>
-          )}
-        </aside>
-      </main>
+          </div>
+        </main>
 
-      <footer className="footer">
-        Availability ignoring time is exact: every combination of outages is enumerated until what's left is below 10⁻⁹. Anything involving time is simulated, so it
-        comes with a 95% interval. Everything runs in your browser.
-      </footer>
+        <aside className="pane" aria-label={showCode ? 'Code' : selection ? 'Inspector' : 'Results'}>
+          {pane}
+        </aside>
+      </div>
     </div>
   );
 }

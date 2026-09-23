@@ -2,6 +2,7 @@
  * Everything the UI shows for one topology + inputs pair, except the
  * latency simulation, which runs separately because it is slower.
  */
+import { type FailureLever, failureLevers } from './model/attribution';
 import { type AvailabilityResult, modelAvailability, napkinAvailability } from './model/availability';
 import type { Diagnostic } from './model/diagnostics';
 import { type Inputs, parseInputs } from './model/inputs';
@@ -19,6 +20,8 @@ export interface Analysis {
   evaluation?: Evaluation;
   napkin?: number;
   napkinP99?: number;
+  /** Exact what-ifs per service, largest first. */
+  levers?: FailureLever[];
   /** Modeling caveats worth pointing out; not errors. */
   notes: string[];
 }
@@ -45,6 +48,7 @@ export function analyze(dot: string, yaml: string): Analysis {
     evaluation: evaluateObjectives(topology.value, inputs.value, availability),
     napkin: napkinAvailability(topology.value, inputs.value),
     napkinP99: napkinLatencyP99(topology.value, inputs.value),
+    levers: failureLevers(topology.value, inputs.value, availability),
     notes,
   };
 }

@@ -14,6 +14,7 @@
  * successful requests only (step 3 as a share of step 2).
  */
 import type { AvailabilityResult } from './availability';
+import { type TimeoutLoss, timeoutLosses } from './attribution';
 import { compile } from './compile';
 import type { Inputs } from './inputs';
 import { countAtMost, percentileOf, wilson } from './latency';
@@ -54,6 +55,8 @@ export interface Evaluation {
   withTimeouts?: Measure;
   latency: LatencyState;
   objectives: ObjectiveResult[];
+  /** Requests lost to each call's timeouts, largest first; empty until simulated. */
+  timeoutLosses: TimeoutLoss[];
 }
 
 export interface SimulationInput {
@@ -153,7 +156,7 @@ export function evaluateObjectives(
     }
   }
 
-  return { ignoringTime, fullIgnoringTime, hasTimeouts, withTimeouts, latency, objectives };
+  return { ignoringTime, fullIgnoringTime, hasTimeouts, withTimeouts, latency, objectives, timeoutLosses: run ? timeoutLosses(topology, run) : [] };
 }
 
 function enumerated(value: number, result: AvailabilityResult): Measure {

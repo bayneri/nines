@@ -11,7 +11,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@viz-js/viz": "^3.30.0",
+    "@dagrejs/dagre": "^3.1.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "ts-graphviz": "^3.0.7",
