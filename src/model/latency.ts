@@ -5,7 +5,7 @@
  */
 import { compile } from './compile';
 import type { Inputs } from './inputs';
-import { simulateLatency } from './sampler';
+import { type LatencySimulation, simulateLatency } from './sampler';
 import type { Topology } from './topology';
 
 /** A sampled proportion with its 95% Wilson score interval. */
@@ -42,16 +42,28 @@ export function modelLatency(topology: Topology, inputs: Inputs, options: Latenc
   if (missing.length > 0) return { status: 'missing', nodes: missing };
 
   const targetMs = inputs.objective.latencyMs;
-  const run = simulateLatency(model, trials, options.seed ?? 1, targetMs ?? Infinity);
-  const latencies = run.successLatencies;
+  return summarizeLatency([simulateLatency(model, trials, options.seed ?? 1, targetMs ?? Infinity)], targetMs);
+}
+
+/** Combines independent simulation runs (different seeds, same model and target). */
+export function summarizeLatency(runs: LatencySimulation[], targetMs: number | undefined): LatencyAnalysis {
+  const sum = (key: 'trials' | 'succeeded' | 'withinTarget' | 'fullWithinTarget') => runs.reduce((total, r) => total + r[key], 0);
+  const trials = sum('trials');
+  const latencies = new Float64Array(sum('succeeded'));
+  let offset = 0;
+  for (const run of runs) {
+    latencies.set(run.successLatencies, offset);
+    offset += run.successLatencies.length;
+  }
+  latencies.sort();
   const percentile = (q: number) => latencies[Math.min(latencies.length - 1, Math.ceil(q * latencies.length) - 1)]!;
   return {
     status: 'modeled',
     trials,
     targetMs,
-    succeeded: wilson(run.succeeded, trials),
-    withinTarget: wilson(run.withinTarget, trials),
-    fullWithinTarget: wilson(run.fullWithinTarget, trials),
+    succeeded: wilson(sum('succeeded'), trials),
+    withinTarget: wilson(sum('withinTarget'), trials),
+    fullWithinTarget: wilson(sum('fullWithinTarget'), trials),
     percentiles: latencies.length > 0 ? { p50: percentile(0.5), p90: percentile(0.9), p99: percentile(0.99) } : undefined,
   };
 }

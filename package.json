@@ -3,17 +3,27 @@
   "version": "1.0.0",
   "description": "Composite SLO explorer: napkin math vs modeled availability",
   "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",
   "dependencies": {
+    "@viz-js/viz": "^3.30.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "ts-graphviz": "^3.0.7",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "typescript": "^7.0.2",
+    "vite": "^8.3.0",
     "vitest": "^5.0.1"
   },
   "private": true
