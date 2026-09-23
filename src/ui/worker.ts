@@ -70,10 +70,14 @@ async function findPathTask({ id, dot, yaml, allowPartial }: WorkerRequest) {
   const analysis = analyze(dot, yaml);
   const doc = docFromAnalysis(analysis);
   if (!doc || !analysis.topology || !analysis.inputs || !analysis.availability) return;
+  // Exactly the headline's simulation, so the path starts from the number on
+  // screen, and each step is evaluated the same way so its value is what the
+  // headline will show once the path is applied.
+  const seeds = Array.from({ length: CHUNKS }, (_, i) => i + 1);
   const model = compile(analysis.topology, analysis.inputs);
-  const run = combineRuns([1, 2].map((seed) => simulateLatency(model, CHUNK_TRIALS, seed)));
+  const run = combineRuns(seeds.map((seed) => simulateLatency(model, CHUNK_TRIALS, seed)));
   const evaluation = evaluateObjectives(analysis.topology, analysis.inputs, analysis.availability, { run, done: true });
-  for (const progress of findPath(doc, { analysis, evaluation }, { allowPartial })) {
+  for (const progress of findPath(doc, { analysis, evaluation }, { allowPartial, stateSeeds: seeds, stateTrials: CHUNK_TRIALS })) {
     post({ id, kind: 'path', progress });
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (latest !== id) return;

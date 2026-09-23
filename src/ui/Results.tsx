@@ -9,6 +9,7 @@ import { parseMs, parsePercent } from './controls';
 import { decimalsFor, decimalsForInterval, inputPercent, ms, ninesDelta, percent, scientific } from './format';
 import type { Selection } from './Graph';
 import { Icon } from './icons';
+import { useRememberedOpen } from './remember';
 import { failureMode } from './words';
 import { nodeName, share } from './words';
 
@@ -18,7 +19,8 @@ interface Props {
   evaluation: Evaluation;
   /** The lesson as loaded, to compare against once edited. */
   baseline?: Evaluation;
-  advanced: boolean;
+  /** Targets removed earlier in the session, restored when added back. */
+  lastTargets: LastTargets;
   actions?: ActionsState;
   onApply: (spec: ActionSpec) => void;
   path?: PathState;
@@ -35,7 +37,7 @@ const find = <K extends ObjectiveResult['kind']>(objectives: ObjectiveResult[], 
   objectives.find((o): o is Extract<ObjectiveResult, { kind: K }> => o.kind === kind);
 const VERDICT: Record<Verdict, string> = { met: 'Kept', missed: 'Broken', unclear: "Can't tell yet" };
 
-export function Results({ doc, analysis, evaluation: e, baseline, advanced, actions, onApply, path, onFindPath, onApplyPath, onObjectives, onHighlight, onSelect }: Props) {
+export function Results({ doc, analysis, evaluation: e, baseline, lastTargets, actions, onApply, path, onFindPath, onApplyPath, onObjectives, onHighlight, onSelect }: Props) {
   const objectives = doc.objectives;
   const within = find(e.objectives, 'succeed_within');
   const was = (pick: (ev: Evaluation) => Measure | undefined) => {
@@ -66,11 +68,13 @@ export function Results({ doc, analysis, evaluation: e, baseline, advanced, acti
         </section>
       )}
 
-      <Breakdown doc={doc} analysis={analysis} evaluation={e} advanced={advanced} was={was} onObjectives={onObjectives} />
+      <Breakdown doc={doc} analysis={analysis} evaluation={e} lastTargets={lastTargets} was={was} onObjectives={onObjectives} />
       <SeparateVsCombined objectives={e.objectives} />
       {find(e.objectives, 'succeed_within')?.verdict === 'missed' && actions?.done && <Path doc={doc} path={path} onFind={onFindPath} onApply={onApplyPath} />}
       <Actions doc={doc} evaluation={e} actions={actions} onApply={onApply} onHighlight={onHighlight} />
-      {advanced && <Losses doc={doc} analysis={analysis} evaluation={e} onHighlight={onHighlight} onSelect={onSelect} />}
+      <LossesDisclosure>
+        <Losses doc={doc} analysis={analysis} evaluation={e} onHighlight={onHighlight} onSelect={onSelect} />
+      </LossesDisclosure>
 
       {e.fullIgnoringTime.value < e.ignoringTime.value - 1e-12 && (
         <p className="aside">
@@ -166,11 +170,16 @@ function NapkinVerdict({ napkin, modeled }: { napkin: number; modeled: number })
 
 // ---- How the number comes about ---------------------------------------------
 
-function Breakdown({ doc, analysis, evaluation: e, advanced, was, onObjectives }: {
+export interface LastTargets {
+  availability?: number;
+  latency?: { percentile: number; ms: number };
+}
+
+function Breakdown({ doc, analysis, evaluation: e, lastTargets, was, onObjectives }: {
   doc: Doc;
   analysis: Analysis;
   evaluation: Evaluation;
-  advanced: boolean;
+  lastTargets: LastTargets;
   was: (pick: (ev: Evaluation) => Measure | undefined) => string | undefined;
   onObjectives: (o: Objectives) => void;
 }) {
@@ -196,9 +205,25 @@ function Breakdown({ doc, analysis, evaluation: e, advanced, was, onObjectives }
           )}
           {was((ev) => ev.withTimeouts) && <span className="was"> Was {was((ev) => ev.withTimeouts)}.</span>}
         </span>
-        {availability && (
-          <TargetChip verdict={availability.verdict} text={`target ${inputPercent(availability.target)}`} onRemove={advanced ? () => onObjectives({ ...objectives, availability: undefined }) : undefined} />
-        )}
+        <span className="targets">
+          {objectives.availability !== undefined ? (
+            <Target
+              verdict={availability?.verdict}
+              label="Availability target"
+              prefix="target ≥"
+              value={inputPercent(objectives.availability).replace('%', '')}
+              suffix="%"
+              parse={parsePercent}
+              onChange={(v) => onObjectives({ ...objectives, availability: v })}
+              onRemove={() => {
+                lastTargets.availability = objectives.availability;
+                onObjectives({ ...objectives, availability: undefined });
+              }}
+            />
+          ) : (
+            <AddTarget onAdd={() => onObjectives({ ...objectives, availability: lastTargets.availability ?? objectives.succeedWithin?.target ?? 0.999 })} />
+          )}
+        </span>
       </div>
       {limit !== undefined && (
         <div className="factor">
@@ -210,45 +235,60 @@ function Breakdown({ doc, analysis, evaluation: e, advanced, was, onObjectives }
             {p99 !== undefined && analysis.napkinP99 !== undefined && `; adding up p99s would say ${ms(analysis.napkinP99)}`}
             {p99 !== undefined && '.'}
           </span>
-          {latencies.map((l, i) => (
-            <TargetChip
-              key={i}
-              verdict={l.verdict}
-              text={`target ${pName(l.percentile)} ≤ ${l.ms} ms`}
-              onRemove={advanced ? () => onObjectives(withLatencyObjective(objectives, i, undefined)) : undefined}
-            />
-          ))}
-        </div>
-      )}
-      {advanced && (
-        <div className="row-actions start">
-          {objectives.availability === undefined && (
-            <button className="text-button" onClick={() => onObjectives({ ...objectives, availability: objectives.succeedWithin?.target ?? 0.999 })}>
-              <Icon name="plus" size={13} /> Separate availability target
-            </button>
-          )}
-          {!objectives.latency.some((l) => l.percentile === 0.99) && (
-            <button className="text-button" onClick={() => onObjectives(withLatencyObjective(objectives, objectives.latency.length, { percentile: 0.99, ms: objectives.succeedWithin?.ms ?? 500 }))}>
-              <Icon name="plus" size={13} /> Separate p99 target
-            </button>
-          )}
+          <span className="targets">
+            {objectives.latency.map((l, i) => (
+              <Target
+                key={`${l.percentile}`}
+                verdict={latencies.find((o) => o.percentile === l.percentile)?.verdict}
+                label={`${pName(l.percentile)} target`}
+                prefix={`target ${pName(l.percentile)} ≤`}
+                value={String(l.ms)}
+                suffix="ms"
+                parse={(t) => parseMs(t, false)}
+                onChange={(v) => onObjectives(withLatencyObjective(objectives, i, { ...l, ms: v }))}
+                onRemove={() => {
+                  lastTargets.latency = l;
+                  onObjectives(withLatencyObjective(objectives, i, undefined));
+                }}
+              />
+            ))}
+            {objectives.latency.length === 0 && (
+              <AddTarget onAdd={() => onObjectives(withLatencyObjective(objectives, 0, lastTargets.latency ?? { percentile: 0.99, ms: limit }))} />
+            )}
+          </span>
         </div>
       )}
     </section>
   );
 }
 
-function TargetChip({ verdict, text, onRemove }: { verdict: Verdict; text: string; onRemove?: () => void }) {
+/** A separate target on its row: edit the number in place, or remove it. */
+function Target({ verdict, label, prefix, value, suffix, parse, onChange, onRemove }: {
+  verdict?: Verdict;
+  label: string;
+  prefix: string;
+  value: string;
+  suffix: string;
+  parse: (t: string) => number | string | undefined;
+  onChange: (v: number) => void;
+  onRemove: () => void;
+}) {
   return (
-    <span className={`target-chip ${verdict}`}>
-      <Icon name={verdict === 'met' ? 'check' : verdict === 'missed' ? 'cross' : 'question'} size={12} />
-      {text}
-      {onRemove && (
-        <button className="chip-remove" onClick={onRemove} aria-label={`Remove ${text}`}>
-          <Icon name="close" size={11} />
-        </button>
-      )}
+    <span className={`target-chip ${verdict ?? 'unclear'}`}>
+      {verdict && <Icon name={verdict === 'met' ? 'check' : verdict === 'missed' ? 'cross' : 'question'} size={12} />}
+      {prefix} <InlineNumber label={label} value={value} suffix={suffix} parse={parse} onCommit={onChange} />
+      <button className="chip-remove" onClick={onRemove} aria-label={`Remove the ${label.toLowerCase()}`} title="Remove this target">
+        <Icon name="close" size={11} />
+      </button>
     </span>
+  );
+}
+
+function AddTarget({ onAdd }: { onAdd: () => void }) {
+  return (
+    <button className="target-add" onClick={onAdd} title="Also hold this part to a target of its own">
+      <Icon name="plus" size={12} /> Add a target
+    </button>
   );
 }
 
@@ -448,8 +488,7 @@ function Losses({ doc, analysis, evaluation, onHighlight, onSelect }: { doc: Doc
   if (shown.length === 0) return null;
   const max = shown[0]!.value;
   return (
-    <section className="losses" aria-labelledby="losses-title">
-      <h3 id="losses-title">Where requests are lost</h3>
+    <section className="losses" aria-label="Where requests are lost">
       <p className="section-intro">Share of all requests lost to each cause. Point at one to find it on the graph.</p>
       <ol>
         {shown.map((row) => (
@@ -467,6 +506,19 @@ function Losses({ doc, analysis, evaluation, onHighlight, onSelect }: { doc: Doc
       </ol>
       <p className="fine">A failing service is credited with what you’d win back if it never failed. With redundancy these can overlap.</p>
     </section>
+  );
+}
+
+/** "Where requests are lost", collapsed under the ranked actions and remembered open or closed. */
+function LossesDisclosure({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useRememberedOpen('losses');
+  return (
+    <details className="how losses-disclosure" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>
+        <Icon name="chevron" size={14} /> Where requests are lost
+      </summary>
+      {children}
+    </details>
   );
 }
 

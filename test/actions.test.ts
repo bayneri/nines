@@ -140,3 +140,21 @@ describe('findPath', () => {
     expect(applied).not.toEqual(doc);
   });
 });
+
+describe('findPath and the headline', () => {
+  it('starts from the headline figure and ends where the headline will be after applying', () => {
+    const doc = lesson('checkout');
+    const seeds = [1, 2, 3];
+    const headline = (d: Doc) => {
+      const analysis = analyze(toDot(d), toYaml(d));
+      const run = combineRuns(seeds.map((seed) => simulateLatency(compile(analysis.topology!, analysis.inputs!), 5_000, seed)));
+      return { analysis, evaluation: evaluateObjectives(analysis.topology!, analysis.inputs!, analysis.availability!, { run, done: true }) };
+    };
+    const value = (e: ReturnType<typeof headline>) => e.evaluation.objectives.find((o) => o.kind === 'succeed_within')!.measure!.value;
+    const today = headline(doc);
+    let last: PathProgress | undefined;
+    for (const p of findPath(doc, today, { trials: 5_000, stateSeeds: seeds, stateTrials: 5_000 })) last = p;
+    expect(last!.start).toBe(value(today));
+    expect(last!.steps.at(-1)!.after).toBe(value(headline(applyPath(doc, last!.steps))));
+  });
+});

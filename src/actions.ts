@@ -359,6 +359,13 @@ export type PathOutcome =
 
 export interface PathOptions extends RankOptions {
   maxSteps?: number;
+  /**
+   * How to evaluate the system after each step. Pass the same seeds and trials
+   * as the headline figure, so each step's value is what the pane shows once
+   * the path is applied.
+   */
+  stateSeeds?: number[];
+  stateTrials?: number;
   /** Allow changes that make answers partial (optional calls, partial fan-out). */
   allowPartial?: boolean;
 }
@@ -425,7 +432,7 @@ export function* findPath(doc: Doc, baseline: { analysis: Analysis; evaluation: 
     applied.add(identity(current, best.spec));
     progress.steps.push({ spec: best.spec, title: describeAction(current, best.spec).title, after: best.after });
     current = applyAction(current, best.spec);
-    const next = evaluateDoc(current, options.seeds ?? [1, 2], options.trials ?? 20_000);
+    const next = evaluateDoc(current, options.stateSeeds ?? options.seeds ?? [1, 2], options.stateTrials ?? options.trials ?? 20_000);
     if (!next) {
       outcome = 'stuck';
       break;

@@ -21,14 +21,13 @@ import { NODE_ICONS, type NodeIcon } from '../model/topology';
 import { Chips, Field, Segmented, Stepper, parseMs, parsePercent } from './controls';
 import { inputPercent } from './format';
 import { Icon } from './icons';
+import { useRememberedOpen } from './remember';
 import { callName, groupText, nodeName, share } from './words';
 
 interface Common {
   doc: Doc;
   analysis?: Analysis;
   evaluation?: Evaluation;
-  /** Advanced sections start open. */
-  advanced: boolean;
   /**
    * Applies an edit; a string is an error to show. Edits sharing a `coalesce`
    * key in quick succession (a slider drag) become one undo step.
@@ -59,9 +58,11 @@ function Frame({ title, onBack, onDelete, deleteLabel, children }: { title: Reac
   );
 }
 
-function Advanced({ open, children }: { open: boolean; children: ReactNode }) {
+/** Settings most people never need, closed unless this kind of section was last left open. */
+function Advanced({ id, children }: { id: string; children: ReactNode }) {
+  const [open, setOpen] = useRememberedOpen(`advanced.${id}`);
   return (
-    <details className="more" open={open || undefined}>
+    <details className="more" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <Icon name="chevron" size={13} /> Advanced
       </summary>
@@ -84,7 +85,7 @@ export function NodeInspector(props: Common & {
   return node.type === 'service' ? <ServiceInspector {...props} node={node} /> : <GroupInspector {...props} node={node} />;
 }
 
-function ServiceInspector({ doc, analysis, evaluation, advanced, node, onEdit, onBack, onRenamed, onCallAnother, onAddDependency, onMakeRedundant }: Common & {
+function ServiceInspector({ doc, analysis, evaluation, node, onEdit, onBack, onRenamed, onCallAnother, onAddDependency, onMakeRedundant }: Common & {
   node: DocNode;
   onRenamed: (id: string) => void;
   onCallAnother: () => void;
@@ -178,7 +179,7 @@ function ServiceInspector({ doc, analysis, evaluation, advanced, node, onEdit, o
         </button>
       </div>
 
-      <Advanced open={advanced}>
+      <Advanced id="service">
         <div className="field">
           <label htmlFor={`mix-${id}`}>How it fails</label>
           <input id={`mix-${id}`} type="range" min={0} max={100} step={5} value={flaky} onChange={(e) => onEdit(updateNode(doc, id, { transient: Number(e.target.value) / 100 }), `mix:${id}`)} />
@@ -237,7 +238,7 @@ function ServiceInspector({ doc, analysis, evaluation, advanced, node, onEdit, o
   );
 }
 
-function GroupInspector({ doc, advanced, node, onEdit, onBack, onSelectCall, onCallAnother }: Common & { node: DocNode; onSelectCall: (index: number) => void; onCallAnother: () => void }) {
+function GroupInspector({ doc, node, onEdit, onBack, onSelectCall, onCallAnother }: Common & { node: DocNode; onSelectCall: (index: number) => void; onCallAnother: () => void }) {
   const options = doc.calls.map((c, i) => ({ c, i })).filter(({ c }) => c.from === node.id);
   return (
     <Frame title={groupText(doc, node)} onBack={onBack} onDelete={doc.entry === node.id ? undefined : () => onEdit(removeNode(doc, node.id))} deleteLabel="Delete this group">
@@ -267,7 +268,7 @@ function GroupInspector({ doc, advanced, node, onEdit, onBack, onSelectCall, onC
           </button>
         </div>
       </div>
-      <Advanced open={advanced}>
+      <Advanced id="group">
         <Segmented
           label="Answers when"
           value={node.type}
@@ -286,7 +287,7 @@ function GroupInspector({ doc, advanced, node, onEdit, onBack, onSelectCall, onC
   );
 }
 
-export function CallInspector({ doc, evaluation, advanced, index, onEdit, onBack }: Common & { index: number }) {
+export function CallInspector({ doc, evaluation, index, onEdit, onBack }: Common & { index: number }) {
   const call = doc.calls[index];
   if (!call) return null;
   const caller = doc.nodes.find((n) => n.id === call.from)!;
@@ -316,7 +317,7 @@ export function CallInspector({ doc, evaluation, advanced, index, onEdit, onBack
           onChange={(dependency) => update({ dependency })}
         />
       )}
-      <Advanced open={advanced || call.retries > 0 || call.timeoutMs !== undefined || call.fanout > 1}>
+      <Advanced id="call">
         <Field
           label="Timeout"
           value={call.timeoutMs === undefined ? '' : String(call.timeoutMs)}

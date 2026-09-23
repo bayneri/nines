@@ -770,17 +770,50 @@ input[type='checkbox'] {
   font-size: 12.5px;
   color: var(--muted);
 }
-.target-chip {
+.targets {
   grid-column: 1 / -1;
-  justify-self: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.target-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-top: 4px;
-  padding: 1px 8px;
+  padding: 1px 4px 1px 8px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 500;
+}
+.target-chip .inline-number input {
+  height: 20px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  border-bottom-color: currentColor;
+}
+.target-chip .inline-number input:hover,
+.target-chip .inline-number input:focus {
+  background: var(--surface);
+}
+.target-add {
+  height: 24px;
+  padding: 0 9px;
+  gap: 4px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.target-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.losses-disclosure .losses {
+  margin-top: 10px;
 }
 .target-chip.met {
   background: var(--good-soft);
@@ -1602,9 +1635,6 @@ details[open] > summary .icon {
   .topbar {
     gap: 2px;
     padding: 0 10px;
-  }
-  .switch-label {
-    display: none;
   }
   .mode-switch button {
     padding: 0 8px;

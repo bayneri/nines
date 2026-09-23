@@ -10,7 +10,7 @@ import { Icon } from './icons';
 import { CallInspector, NodeInspector } from './Inspector';
 import { Legend } from './Legend';
 import { Lessons } from './Lessons';
-import { Results } from './Results';
+import { type LastTargets, Results } from './Results';
 import type { WorkerRequest, WorkerResponse } from './worker';
 import { nodeName, share } from './words';
 
@@ -64,20 +64,8 @@ export function App() {
   const [completed, setCompleted] = useState<Set<string>>(new Set());
   const [showLosses, setShowLosses] = useState(true);
   const [showCode, setShowCode] = useState(false);
-  const [advanced, setAdvanced] = useState(() => {
-    try {
-      return localStorage.getItem('nines.advanced') === '1';
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem('nines.advanced', advanced ? '1' : '0');
-    } catch {
-      // Storage can be unavailable; the switch then just doesn't persist.
-    }
-  }, [advanced]);
+  // Targets someone removed, so adding one back restores what they had.
+  const lastTargets = useRef<LastTargets>({});
 
   const [analysis, setAnalysis] = useState<Analysis>();
   const [evaluation, setEvaluation] = useState<Evaluation>();
@@ -257,7 +245,6 @@ export function App() {
       onBack={() => setSelection(undefined)}
       onSelectCall={(index) => setSelection({ kind: 'call', index })}
       onRenamed={(id) => setSelection({ kind: 'node', id })}
-      advanced={advanced}
       onAddDependency={() => addDependency(selection.id)}
       onCallAnother={() => setPicking(selection.id)}
       onMakeRedundant={() => {
@@ -268,14 +255,14 @@ export function App() {
       }}
     />
   ) : selection?.kind === 'call' ? (
-    <CallInspector advanced={advanced} doc={doc} analysis={current?.analysis} evaluation={current?.evaluation} index={selection.index} onEdit={edit} onBack={() => setSelection(undefined)} />
+    <CallInspector doc={doc} analysis={current?.analysis} evaluation={current?.evaluation} index={selection.index} onEdit={edit} onBack={() => setSelection(undefined)} />
   ) : ready ? (
     <Results
       doc={doc}
       analysis={current.analysis}
       evaluation={current.evaluation}
       baseline={mode === 'learn' && lessonEdited ? baselines[lessonId] : undefined}
-      advanced={advanced}
+      lastTargets={lastTargets.current}
       actions={actions?.key === dot + yaml ? actions : undefined}
       path={path?.key === dot + yaml ? path : undefined}
       onFindPath={(allowPartial: boolean) => {
@@ -316,10 +303,6 @@ export function App() {
           </button>
         </div>
         <span className="spacer" />
-        <label className="switch" title="Show every setting, for power users">
-          <input type="checkbox" role="switch" aria-label="Advanced" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} />
-          <span className="switch-label">Advanced</span>
-        </label>
         <button className="icon-button" onClick={undo} disabled={history.index === 0} aria-label="Undo" title="Undo (⌘Z)">
           <Icon name="undo" />
         </button>
