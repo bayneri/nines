@@ -19,7 +19,10 @@ describe('parseInputs', () => {
   it('resolves every service node, merging defaults field by field', () => {
     const { value, diagnostics } = parse(`
 topology: shop.dot
-objective: { availability: 99.9%, latency_ms: 300 }
+objectives:
+  availability: 99.9%
+  latency: { p50_ms: 80, p99_ms: 300 }
+  succeed_within: { ms: 300, target: 99.5% }
 defaults: { availability: 0.999, transient: 0.5, latency: { p50_ms: 10, p99_ms: 50 } }
 nodes:
   web:  { availability: 99.99% }
@@ -28,7 +31,11 @@ nodes:
 `);
     expect(diagnostics).toEqual([]);
     expect(value!.topology).toBe('shop.dot');
-    expect(value!.objective).toEqual({ availability: 0.999, latencyMs: 300 });
+    expect(value!.objectives).toEqual({
+      availability: 0.999,
+      latency: [{ percentile: 0.5, ms: 80 }, { percentile: 0.99, ms: 300 }],
+      succeedWithin: { ms: 300, target: 0.995 },
+    });
     expect(value!.nodes.get('web')!.availability).toBeCloseTo(0.9999, 12);
     expect(value!.nodes.get('web')!.transient).toBe(0.5);
     expect(value!.nodes.get('api')).toEqual({ availability: 0.999, transient: 0, latency: { p50Ms: 20, p99Ms: 200 } });
@@ -57,6 +64,9 @@ nodes:
       ['half-specified latency', 'defaults: { availability: 0.9, transient: 0, latency: { p50_ms: 5 } }', 'needs both p50_ms and p99_ms'],
       ['p99 below p50', 'defaults: { availability: 0.9, transient: 0, latency: { p50_ms: 50, p99_ms: 5 } }', 'is below its p50_ms'],
       ['non-mapping nodes', 'nodes: [web]', '`nodes` must be a mapping'],
+      ['unknown latency percentiles', 'objectives: { latency: { p98_ms: 300 } }', 'Allowed: p50_ms, p90_ms, p95_ms, p99_ms, p999_ms'],
+      ['half-specified succeed_within', 'objectives: { succeed_within: { ms: 300 } }', 'needs both `ms` and `target`'],
+      ['the old single objective key', 'objective: { availability: 99.9% }', 'Did you mean "objectives"?'],
     ])('%s', (_, yaml, message) => {
       expect(errors(yaml).join('\n')).toContain(message);
     });

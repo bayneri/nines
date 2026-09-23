@@ -6,6 +6,7 @@ import { type AvailabilityResult, modelAvailability, napkinAvailability } from '
 import type { Diagnostic } from './model/diagnostics';
 import { type Inputs, parseInputs } from './model/inputs';
 import { napkinLatencyP99 } from './model/latency';
+import { type Evaluation, evaluateObjectives } from './model/slo';
 import { type Topology, parseTopology } from './model/topology';
 
 export interface Analysis {
@@ -14,6 +15,8 @@ export interface Analysis {
   topology?: Topology;
   inputs?: Inputs;
   availability?: AvailabilityResult;
+  /** Objectives judged without the latency simulation; the worker refines it. */
+  evaluation?: Evaluation;
   napkin?: number;
   napkinP99?: number;
   /** Modeling caveats worth pointing out; not errors. */
@@ -33,11 +36,13 @@ export function analyze(dot: string, yaml: string): Analysis {
   if (!inputs.value) return { diagnostics, topology: topology.value, notes };
 
   if (inputs.value.defaulted.length > 0) notes.push(`Using \`defaults\` for: ${inputs.value.defaulted.join(', ')}.`);
+  const availability = modelAvailability(topology.value, inputs.value);
   return {
     diagnostics,
     topology: topology.value,
     inputs: inputs.value,
-    availability: modelAvailability(topology.value, inputs.value),
+    availability,
+    evaluation: evaluateObjectives(topology.value, inputs.value, availability),
     napkin: napkinAvailability(topology.value, inputs.value),
     napkinP99: napkinLatencyP99(topology.value, inputs.value),
     notes,

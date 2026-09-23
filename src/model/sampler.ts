@@ -29,14 +29,10 @@ export interface SampledAvailability {
 
 export interface LatencySimulation {
   trials: number;
-  /** Requests that succeeded with timeouts enforced, at any latency. */
-  succeeded: number;
-  /** Requests that succeeded within the target (all successes when no target). */
-  withinTarget: number;
-  /** Requests that succeeded in full fidelity within the target. */
-  fullWithinTarget: number;
-  /** Latency of each successful request, sorted ascending. */
+  /** Latency of each request that succeeded (timeouts enforced), sorted ascending. */
   successLatencies: Float64Array;
+  /** Latency of each request that succeeded in full fidelity, sorted ascending. */
+  fullSuccessLatencies: Float64Array;
 }
 
 interface Outcome {
@@ -47,15 +43,15 @@ interface Outcome {
 
 export function sampleAvailability(topology: Topology, inputs: Inputs, trials: number, seed = 1): SampledAvailability {
   const run = simulate(compile(topology, inputs), trials, seed, false);
-  return { availability: run.succeeded / trials, fullFidelity: run.fullWithinTarget / trials, trials };
+  return { availability: run.successLatencies.length / trials, fullFidelity: run.fullSuccessLatencies.length / trials, trials };
 }
 
 /** Requires latency inputs on every reachable service node. */
-export function simulateLatency(model: CompiledModel, trials: number, seed: number, targetMs = Infinity): LatencySimulation {
-  return simulate(model, trials, seed, true, targetMs);
+export function simulateLatency(model: CompiledModel, trials: number, seed: number): LatencySimulation {
+  return simulate(model, trials, seed, true);
 }
 
-function simulate(model: CompiledModel, trials: number, seed: number, timing: boolean, targetMs = Infinity): LatencySimulation {
+function simulate(model: CompiledModel, trials: number, seed: number, timing: boolean): LatencySimulation {
   const random = seededRandom(seed);
   // Outage state per instance, sampled lazily once per request (trial).
   const sampledIn = new Int32Array(model.instanceCount).fill(-1);
@@ -145,19 +141,13 @@ function simulate(model: CompiledModel, trials: number, seed: number, timing: bo
   };
 
   const entry = model.nodes[model.entry]!;
-  let succeeded = 0;
-  let withinTarget = 0;
-  let fullWithinTarget = 0;
   const latencies: number[] = [];
+  const fullLatencies: number[] = [];
   for (trial = 0; trial < trials; trial++) {
     const result = attempt(entry, 0);
     if (!result.ok) continue;
-    succeeded++;
     latencies.push(result.ms);
-    if (result.ms <= targetMs) {
-      withinTarget++;
-      if (result.full) fullWithinTarget++;
-    }
+    if (result.full) fullLatencies.push(result.ms);
   }
-  return { trials, succeeded, withinTarget, fullWithinTarget, successLatencies: Float64Array.from(latencies).sort() };
+  return { trials, successLatencies: Float64Array.from(latencies).sort(), fullSuccessLatencies: Float64Array.from(fullLatencies).sort() };
 }

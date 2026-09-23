@@ -1,6 +1,6 @@
 topology: product_page.dot
-objective:
-  latency_ms: 300
+objectives:
+  latency: { p99_ms: 300 }
 defaults:
   transient: 0.5
 nodes:

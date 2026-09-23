@@ -22,25 +22,40 @@ export interface NodeInputs {
   latency?: LatencyInput;
 }
 
-export interface Objective {
-  /** Target fraction of requests that succeed (and, with latencyMs, succeed in time). */
+/**
+ * Three different promises, each optional:
+ * - availability: this fraction of requests succeed, timeouts enforced.
+ * - latency: this percentile of *successful* requests is at most `ms`.
+ * - succeedWithin: this fraction of *all* requests succeed within `ms`.
+ * Meeting the first two separately does not imply the third: 99.9%
+ * availability and p99 ≤ 400 ms allow ~1.1% of requests to fail or be slow.
+ */
+export interface Objectives {
   availability?: number;
-  /** A request counts as good only if it succeeds within this many milliseconds. */
-  latencyMs?: number;
+  latency: LatencyObjective[];
+  succeedWithin?: { ms: number; target: number };
+}
+
+export interface LatencyObjective {
+  /** As a fraction: p99 -> 0.99. */
+  percentile: number;
+  ms: number;
 }
 
 export interface Inputs {
   /** The topology file this input set was written for, if stated. */
   topology?: string;
-  objective: Objective;
+  objectives: Objectives;
   /** Resolved inputs for every service node in the topology. */
   nodes: Map<string, NodeInputs>;
   /** Service nodes with no entry under `nodes`, fully resolved from `defaults`. */
   defaulted: string[];
 }
 
-const TOP_KEYS = ['topology', 'objective', 'defaults', 'nodes'] as const;
-const OBJECTIVE_KEYS = ['availability', 'latency_ms'] as const;
+const TOP_KEYS = ['topology', 'objectives', 'defaults', 'nodes'] as const;
+const OBJECTIVE_KEYS = ['availability', 'latency', 'succeed_within'] as const;
+const PERCENTILE_KEYS: Record<string, number> = { p50_ms: 0.5, p90_ms: 0.9, p95_ms: 0.95, p99_ms: 0.99, p999_ms: 0.999 };
+const SUCCEED_WITHIN_KEYS = ['ms', 'target'] as const;
 const NODE_KEYS = ['availability', 'transient', 'latency'] as const;
 const LATENCY_KEYS = ['p50_ms', 'p99_ms'] as const;
 
@@ -65,7 +80,7 @@ export function parseInputs(source: string, topology: Topology): ParseResult<Inp
   for (const e of doc.errors) report('error', `YAML syntax error: ${e.message}`, e.pos[0]);
   if (hasErrors(diagnostics)) return { diagnostics };
   if (!isMap(doc.contents)) {
-    error('Inputs must be a YAML mapping with `nodes:` (and optionally `defaults:`, `objective:`).');
+    error('Inputs must be a YAML mapping with `nodes:` (and optionally `defaults:`, `objectives:`).');
     return { diagnostics };
   }
   const root = doc.toJS() as Record<string, unknown>;
@@ -152,14 +167,33 @@ export function parseInputs(source: string, topology: Topology): ParseResult<Inp
     else error('`topology` must be a file name.', ['topology']);
   }
 
-  const objective: Objective = {};
-  const objectiveMap = asMap(root.objective, ['objective'], '`objective`');
-  if (objectiveMap) {
-    checkKeys(objectiveMap, OBJECTIVE_KEYS, ['objective'], '`objective`');
-    const a = availability(objectiveMap.availability, ['objective', 'availability'], 'objective availability');
-    if (a !== undefined) objective.availability = a;
-    const l = positive(objectiveMap.latency_ms, ['objective', 'latency_ms'], 'objective latency_ms');
-    if (l !== undefined) objective.latencyMs = l;
+  const objectives: Objectives = { latency: [] };
+  const objectivesMap = asMap(root.objectives, ['objectives'], '`objectives`');
+  if (objectivesMap) {
+    checkKeys(objectivesMap, OBJECTIVE_KEYS, ['objectives'], '`objectives`');
+    const a = availability(objectivesMap.availability, ['objectives', 'availability'], 'objectives.availability');
+    if (a !== undefined) objectives.availability = a;
+
+    const latency = asMap(objectivesMap.latency, ['objectives', 'latency'], '`objectives.latency`');
+    if (latency) {
+      checkKeys(latency, Object.keys(PERCENTILE_KEYS), ['objectives', 'latency'], '`objectives.latency`');
+      for (const [key, percentile] of Object.entries(PERCENTILE_KEYS)) {
+        const ms = positive(latency[key], ['objectives', 'latency', key], `objectives.latency.${key}`);
+        if (ms !== undefined) objectives.latency.push({ percentile, ms });
+      }
+    }
+
+    const within = asMap(objectivesMap.succeed_within, ['objectives', 'succeed_within'], '`objectives.succeed_within`');
+    if (within) {
+      checkKeys(within, SUCCEED_WITHIN_KEYS, ['objectives', 'succeed_within'], '`objectives.succeed_within`');
+      const ms = positive(within.ms, ['objectives', 'succeed_within', 'ms'], 'objectives.succeed_within.ms');
+      const target = availability(within.target, ['objectives', 'succeed_within', 'target'], 'objectives.succeed_within.target');
+      if (within.ms === undefined || within.target === undefined) {
+        error('`objectives.succeed_within` needs both `ms` and `target`, e.g. { ms: 400, target: 99.9% }.', ['objectives', 'succeed_within']);
+      } else if (ms !== undefined && target !== undefined) {
+        objectives.succeedWithin = { ms, target };
+      }
+    }
   }
 
   const defaults = root.defaults === undefined ? {} : nodeInputs(root.defaults, ['defaults'], '`defaults`') ?? {};
@@ -204,7 +238,7 @@ export function parseInputs(source: string, topology: Topology): ParseResult<Inp
   }
 
   if (hasErrors(diagnostics)) return { diagnostics };
-  return { value: { topology: topologyRef, objective, nodes, defaulted }, diagnostics };
+  return { value: { topology: topologyRef, objectives, nodes, defaulted }, diagnostics };
 }
 
 function stripUndefined<T extends object>(obj: T): T {

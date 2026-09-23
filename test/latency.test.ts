@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { compile, latencyModel } from '../src/model/compile';
 import { modelAvailability } from '../src/model/availability';
 import { type Inputs, parseInputs } from '../src/model/inputs';
-import { modelLatency, napkinLatencyP99, wilson } from '../src/model/latency';
+import { countAtMost, napkinLatencyP99, wilson } from '../src/model/latency';
 import { simulateLatency } from '../src/model/sampler';
 import { type Topology, parseTopology } from '../src/model/topology';
 import { randomModel } from './support/random-model';
@@ -17,14 +17,23 @@ function model(dot: string, nodes: Record<string, Spec>, targetMs?: number): { t
     const [p50, p99] = typeof ms === 'number' ? [ms, ms] : ms;
     return `  ${id}: { availability: ${a}, transient: ${t}, latency: { p50_ms: ${p50}, p99_ms: ${p99} } }`;
   });
-  const objective = targetMs === undefined ? '' : `objective: { latency_ms: ${targetMs} }\n`;
+  const objective = targetMs === undefined ? '' : `objectives: { succeed_within: { ms: ${targetMs}, target: 99% } }\n`;
   const inputs = parseInputs(`${objective}nodes:\n${lines.join('\n')}`, topology.value!);
   expect(inputs.diagnostics).toEqual([]);
   return { topology: topology.value!, inputs: inputs.value! };
 }
 
 const TRIALS = 50_000;
-const run = (m: ReturnType<typeof model>, targetMs = Infinity) => simulateLatency(compile(m.topology, m.inputs), TRIALS, 7, targetMs);
+/** Simulates, then counts outcomes against one latency threshold. */
+const run = (m: ReturnType<typeof model>, targetMs = Infinity) => {
+  const r = simulateLatency(compile(m.topology, m.inputs), TRIALS, 7);
+  return {
+    ...r,
+    succeeded: r.successLatencies.length,
+    withinTarget: countAtMost(r.successLatencies, targetMs),
+    fullWithinTarget: countAtMost(r.fullSuccessLatencies, targetMs),
+  };
+};
 const fraction = (count: number) => count / TRIALS;
 /** Asserts a sampled proportion is within 4.5 standard errors of `p`. */
 const expectProportion = (count: number, p: number) =>
@@ -132,28 +141,8 @@ describe('simulated latency', () => {
     const topology = parseTopology(dot).value!;
     const inputs = parseInputs(yaml, topology).value!;
     const exact = modelAvailability(topology, inputs).availability;
-    const r = simulateLatency(compile(topology, inputs), TRIALS, seed, Infinity);
-    expectProportion(r.succeeded, exact);
-  });
-});
-
-describe('modelLatency', () => {
-  it('names the nodes missing latency inputs', () => {
-    const topology = parseTopology('digraph g { entry=a; a -> b; a -> c; }').value!;
-    const inputs = parseInputs('defaults: { availability: 0.99, transient: 0.5 }\nnodes:\n  b: { latency: { p50_ms: 1, p99_ms: 2 } }', topology).value!;
-    expect(modelLatency(topology, inputs)).toEqual({ status: 'missing', nodes: ['a', 'c'] });
-  });
-
-  it('separates eventual success from success within the target', () => {
-    const m = model('digraph g { entry=a; a -> b [retries=2]; }', { a: { ms: 1 }, b: { a: 0.9, t: 1, ms: 10 } }, 15);
-    const result = modelLatency(m.topology, m.inputs, { trials: TRIALS });
-    const eventual = modelAvailability(m.topology, m.inputs).availability;
-    expect(eventual).toBeCloseTo(0.999, 12);
-    expect(result.status).toBe('modeled');
-    if (result.status !== 'modeled') return;
-    expect(result.withinTarget.low).toBeLessThan(0.9);
-    expect(result.withinTarget.high).toBeGreaterThan(0.9);
-    expect(result.percentiles!.p50).toBeCloseTo(11, 9);
+    const r = simulateLatency(compile(topology, inputs), TRIALS, seed);
+    expectProportion(r.successLatencies.length, exact);
   });
 });
 

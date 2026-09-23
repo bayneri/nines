@@ -1,7 +1,8 @@
 topology: checkout.dot
-objective:
-  availability: 99.95%
-  latency_ms: 1000
+objectives:
+  availability: 99.9%
+  latency: { p99_ms: 800 }
+  succeed_within: { ms: 800, target: 99.9% }
 nodes:
   checkout:  { availability: 99.99%, transient: 0.5, latency: { p50_ms: 15,  p99_ms: 60 } }
   # Mostly flaky requests: retries help a lot here, but each one costs time.

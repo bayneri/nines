@@ -1,7 +1,8 @@
 topology: search.dot
-objective:
+objectives:
   availability: 99.9%
-  latency_ms: 400
+  latency: { p99_ms: 400 }
+  succeed_within: { ms: 400, target: 99.9% }
 defaults:
   transient: 0.5
 nodes:

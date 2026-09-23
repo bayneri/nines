@@ -33,8 +33,8 @@ export const SCENARIOS: Scenario[] = [
     id: 'search',
     title: 'The 100-shard fan-out',
     lesson:
-      'Napkin math gets availability right here. Latency is where it breaks: adding up p99s gives 275 ms against a 400 ms target, but the request waits for the slowest of 100 shards, and about 1 in 6 requests misses.',
-    tryThis: 'Add fanout_require=95 to the shard edge. Partial results rescue the latency target, at the cost of full-fidelity answers.',
+      'Ignoring time, napkin math is right: 98.9%. But each request waits for the slowest of 100 shards, and the 300 ms shard timeout turns that tail into errors: about 1 in 6 requests fail. The p99 of successful requests still looks fine, because the slow ones became failures.',
+    tryThis: 'Add fanout_require=95 to the shard edge. Tolerating 5 missing shards takes availability from 83% to about 99.8%, still short of 99.9%, and every one of those rescued answers is partial.',
     dot: searchDot,
     yaml: searchYaml,
   },
@@ -42,8 +42,8 @@ export const SCENARIOS: Scenario[] = [
     id: 'checkout',
     title: "Retries don't save you",
     lesson:
-      "Napkin math treats a retry as a fresh roll of everything below it. Retries do recover payments' flaky errors, but the ledger fails by outage, which lasts across every retry. And each retry costs time.",
-    tryThis: 'Remove retries=3 to see what they actually buy, then change ledger_db transient to 1 to see what napkin math assumed.',
+      "Retries recover payments' flaky errors, but not ledger outages, which last across every retry. Each retry also costs time: availability (99.9%) and p99 ≤ 800 ms are both met separately, while the promise that 99.9% of requests succeed within 800 ms is missed.",
+    tryThis: 'Remove retries=3: availability falls to about 99.2%, because a payments call slower than its 800 ms timeout now fails outright. Then set ledger_db transient to 1 to see what napkin math assumed.',
     dot: checkoutDot,
     yaml: checkoutYaml,
   },

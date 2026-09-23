@@ -1,7 +1,7 @@
 topology: multi_region.dot
-objective:
+objectives:
   availability: 99.99%
-  latency_ms: 500
+  latency: { p99_ms: 500 }
 nodes:
   frontend:      { availability: 99.99%, transient: 0.5, latency: { p50_ms: 5,   p99_ms: 20 } }
   # Failover goes to the farther region.

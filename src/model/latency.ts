@@ -1,11 +1,6 @@
-/**
- * Success within the latency target, estimated by simulating requests with
- * timeouts enforced. Unlike eventual success (availability.ts), a request
- * only counts if it succeeds and answers within `objective.latencyMs`.
- */
-import { compile } from './compile';
+/** Helpers for simulated latency results, and napkin latency math for contrast. */
 import type { Inputs } from './inputs';
-import { type LatencySimulation, simulateLatency } from './sampler';
+import type { LatencySimulation } from './sampler';
 import type { Topology } from './topology';
 
 /** A sampled proportion with its 95% Wilson score interval. */
@@ -15,57 +10,40 @@ export interface Estimate {
   high: number;
 }
 
-export type LatencyAnalysis =
-  | {
-      status: 'modeled';
-      trials: number;
-      targetMs?: number;
-      /** Succeeded with timeouts enforced, at any latency. */
-      succeeded: Estimate;
-      /** Succeeded within the target; equals `succeeded` when there is no target. */
-      withinTarget: Estimate;
-      fullWithinTarget: Estimate;
-      /** Latency percentiles of successful requests. */
-      percentiles: { p50: number; p90: number; p99: number } | undefined;
+/** Merges independent simulation runs (different seeds, same model). */
+export function combineRuns(runs: LatencySimulation[]): LatencySimulation {
+  const merge = (key: 'successLatencies' | 'fullSuccessLatencies') => {
+    const merged = new Float64Array(runs.reduce((n, r) => n + r[key].length, 0));
+    let offset = 0;
+    for (const run of runs) {
+      merged.set(run[key], offset);
+      offset += run[key].length;
     }
-  | { status: 'missing'; nodes: string[] };
-
-export interface LatencyOptions {
-  trials?: number;
-  seed?: number;
-}
-
-export function modelLatency(topology: Topology, inputs: Inputs, options: LatencyOptions = {}): LatencyAnalysis {
-  const trials = options.trials ?? 100_000;
-  const model = compile(topology, inputs);
-  const missing = model.nodes.filter((n) => n.type === 'service' && !n.latency).map((n) => n.id);
-  if (missing.length > 0) return { status: 'missing', nodes: missing };
-
-  const targetMs = inputs.objective.latencyMs;
-  return summarizeLatency([simulateLatency(model, trials, options.seed ?? 1, targetMs ?? Infinity)], targetMs);
-}
-
-/** Combines independent simulation runs (different seeds, same model and target). */
-export function summarizeLatency(runs: LatencySimulation[], targetMs: number | undefined): LatencyAnalysis {
-  const sum = (key: 'trials' | 'succeeded' | 'withinTarget' | 'fullWithinTarget') => runs.reduce((total, r) => total + r[key], 0);
-  const trials = sum('trials');
-  const latencies = new Float64Array(sum('succeeded'));
-  let offset = 0;
-  for (const run of runs) {
-    latencies.set(run.successLatencies, offset);
-    offset += run.successLatencies.length;
-  }
-  latencies.sort();
-  const percentile = (q: number) => latencies[Math.min(latencies.length - 1, Math.ceil(q * latencies.length) - 1)]!;
-  return {
-    status: 'modeled',
-    trials,
-    targetMs,
-    succeeded: wilson(sum('succeeded'), trials),
-    withinTarget: wilson(sum('withinTarget'), trials),
-    fullWithinTarget: wilson(sum('fullWithinTarget'), trials),
-    percentiles: latencies.length > 0 ? { p50: percentile(0.5), p90: percentile(0.9), p99: percentile(0.99) } : undefined,
+    return merged.sort();
   };
+  return {
+    trials: runs.reduce((n, r) => n + r.trials, 0),
+    successLatencies: merge('successLatencies'),
+    fullSuccessLatencies: merge('fullSuccessLatencies'),
+  };
+}
+
+/** Number of values <= ms in an ascending array. */
+export function countAtMost(sorted: Float64Array, ms: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sorted[mid]! <= ms) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Nearest-rank percentile of an ascending array; q in (0, 1]. */
+export function percentileOf(sorted: Float64Array, q: number): number | undefined {
+  if (sorted.length === 0) return undefined;
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))];
 }
 
 /**

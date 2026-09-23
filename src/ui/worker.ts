@@ -1,12 +1,13 @@
 /**
- * Runs the analysis off the main thread. The exact availability result is
- * posted first; the latency simulation follows in chunks, each posting a
- * refined estimate, and stops early when a newer request arrives.
+ * Runs the analysis off the main thread. The exact result is posted first;
+ * the latency simulation follows in chunks, each posting a refined
+ * evaluation, and stops early when a newer request arrives.
  */
 import { type Analysis, analyze } from '../analysis';
 import { compile } from '../model/compile';
-import { type LatencyAnalysis, summarizeLatency } from '../model/latency';
+import { combineRuns } from '../model/latency';
 import { type LatencySimulation, simulateLatency } from '../model/sampler';
+import { type Evaluation, evaluateObjectives } from '../model/slo';
 
 export interface WorkerRequest {
   id: number;
@@ -16,7 +17,7 @@ export interface WorkerRequest {
 
 export type WorkerResponse =
   | { id: number; kind: 'analysis'; analysis: Analysis }
-  | { id: number; kind: 'latency'; latency: LatencyAnalysis; done: boolean };
+  | { id: number; kind: 'evaluation'; evaluation: Evaluation };
 
 const CHUNK_TRIALS = 20_000;
 const CHUNKS = 5;
@@ -29,22 +30,17 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
   latest = id;
   const analysis = analyze(dot, yaml);
   post({ id, kind: 'analysis', analysis });
-  if (!analysis.topology || !analysis.inputs) return;
+  const { topology, inputs, availability, evaluation } = analysis;
+  if (!topology || !inputs || !availability || evaluation?.latency.status !== 'pending') return;
 
-  const model = compile(analysis.topology, analysis.inputs);
-  const missing = model.nodes.filter((n) => n.type === 'service' && !n.latency).map((n) => n.id);
-  if (missing.length > 0) {
-    post({ id, kind: 'latency', latency: { status: 'missing', nodes: missing }, done: true });
-    return;
-  }
-
-  const targetMs = analysis.inputs.objective.latencyMs;
+  const model = compile(topology, inputs);
   const runs: LatencySimulation[] = [];
   for (let chunk = 1; chunk <= CHUNKS; chunk++) {
     // Yield so a newer request can supersede this one between chunks.
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (latest !== id) return;
-    runs.push(simulateLatency(model, CHUNK_TRIALS, chunk, targetMs ?? Infinity));
-    post({ id, kind: 'latency', latency: summarizeLatency(runs, targetMs), done: chunk === CHUNKS });
+    runs.push(simulateLatency(model, CHUNK_TRIALS, chunk));
+    const simulation = { run: combineRuns(runs), done: chunk === CHUNKS };
+    post({ id, kind: 'evaluation', evaluation: evaluateObjectives(topology, inputs, availability, simulation) });
   }
 });

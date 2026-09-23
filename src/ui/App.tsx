@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Analysis } from '../analysis';
-import type { LatencyAnalysis } from '../model/latency';
+import type { Evaluation } from '../model/slo';
 import type { Topology } from '../model/topology';
 import { SCENARIOS } from '../scenarios';
 import { Editor, type FileTab } from './Editor';
@@ -19,7 +19,7 @@ export function App() {
   const [tab, setTab] = useState<FileTab>('dot');
 
   const [analysis, setAnalysis] = useState<Analysis>();
-  const [latency, setLatency] = useState<{ value: LatencyAnalysis; done: boolean }>();
+  const [evaluation, setEvaluation] = useState<Evaluation>();
   const [lastTopology, setLastTopology] = useState<{ topology: Topology; inputs?: Analysis['inputs'] }>();
 
   const worker = useRef<Worker>(undefined);
@@ -32,10 +32,10 @@ export function App() {
       if (message.id !== requestId.current) return;
       if (message.kind === 'analysis') {
         setAnalysis(message.analysis);
-        setLatency(undefined);
+        setEvaluation(message.analysis.evaluation);
         if (message.analysis.topology) setLastTopology({ topology: message.analysis.topology, inputs: message.analysis.inputs });
       } else {
-        setLatency({ value: message.latency, done: message.done });
+        setEvaluation(message.evaluation);
       }
     });
     worker.current = w;
@@ -98,7 +98,13 @@ export function App() {
         />
         <div className="output">
           <GraphView dot={graphDot} stale={analysis !== undefined && !analysis.topology} />
-          {analysis ? <Results analysis={analysis} latency={latency} /> : <section className="results empty">Analyzing…</section>}
+          {!analysis ? (
+            <section className="results empty">Analyzing…</section>
+          ) : evaluation ? (
+            <Results analysis={analysis} evaluation={evaluation} />
+          ) : (
+            <section className="results empty">Fix the errors in the editor to see results.</section>
+          )}
         </div>
       </main>
 

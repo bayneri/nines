@@ -1,9 +1,9 @@
 # Same topology, different question: sales promised 99.99% before anyone
 # checked what this dependency graph can deliver.
 topology: product_page.dot
-objective:
+objectives:
   availability: 99.99%
-  latency_ms: 300
+  latency: { p99_ms: 300 }
 defaults:
   transient: 0.5
 nodes:
